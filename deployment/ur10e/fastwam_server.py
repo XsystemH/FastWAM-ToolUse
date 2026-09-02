@@ -296,6 +296,10 @@ class StagedUR10eServer:
                             send_message(conn, response)
                     except (ConnectionError, EOFError):
                         LOGGER.info("Client disconnected: %s", addr)
+                    except Exception:
+                        # Framing/unpickling errors make the current stream unsafe to
+                        # reuse, but must not terminate the image-check server.
+                        LOGGER.exception("Closing malformed client stream: %s", addr)
 
 
 def parse_args() -> argparse.Namespace:
