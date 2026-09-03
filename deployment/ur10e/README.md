@@ -131,6 +131,7 @@ python -u ros_confirmed_step_client.py \
   --ip <5090-ip> \
   --port 9999 \
   --prompt "pick up the cup" \
+  --image-topic <third-person-camera-image-topic> \
   --action-steps 5 \
   --enable-step-execution \
   --max-joint-delta-rad 0.05 \
@@ -168,6 +169,18 @@ candidate is consumed before ROS publication.  Execution never requests a
 second inference automatically.  Omitting
 `--enable-step-execution` leaves the same interface available for rehearsal but
 does not create command publishers.
+
+The default `--image-topic /camera/color/image_raw` must not be assumed to be
+the desired view.  On the industrial PC, enumerate the currently published
+image topics and pass the verified third-person topic explicitly.  At startup
+the client prints both the selected topic and the first ROS `frame_id`; inspect
+the displayed local image before pressing I.  If the displayed image is still
+the wrist view, quit without inference or execution and correct the topic.
+
+Wire messages use JPEG `bytes` and ordinary Python action lists rather than
+pickled NumPy arrays.  This keeps a NumPy 1.x ROS workstation compatible with a
+NumPy 2.x inference server and avoids `No module named numpy._core` during
+response deserialization.
 
 Once a confirmed chunk has been published, I, X and Q do not interrupt it;
 they remain locked until its nominal trajectory duration has elapsed.  This

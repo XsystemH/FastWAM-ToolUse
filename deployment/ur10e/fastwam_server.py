@@ -293,9 +293,12 @@ class StagedUR10eServer:
             "preview_jpeg": encode_preview_jpeg(obs.image_rgb),
             "action_semantics": "absolute_joint_target",
             "joint_order": JOINT_ORDER,
-            "predicted_action": safe.actions,
-            "predicted_arm": safe.actions[:, :6],
-            "predicted_gripper": safe.actions[:, -1:],
+            # Keep the wire payload NumPy-version-neutral.  In particular,
+            # NumPy 2 pickles reference ``numpy._core``, which cannot be
+            # imported by older ROS workstations running NumPy 1.x.
+            "predicted_action": safe.actions.tolist(),
+            "predicted_arm": safe.actions[:, :6].tolist(),
+            "predicted_gripper": safe.actions[:, -1:].tolist(),
             "safety": {
                 "source_shape": safe.source_shape,
                 "returned_steps": safe.returned_steps,

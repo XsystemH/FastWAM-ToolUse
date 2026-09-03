@@ -265,7 +265,8 @@ class ProtocolTest(unittest.TestCase):
             )
             self.assertIs(response["execute"], False)
             self.assertFalse({"action", "arm", "gripper"}.intersection(response))
-            self.assertEqual(response["predicted_action"].shape, (1, 7))
+            self.assertIsInstance(response["predicted_action"], list)
+            self.assertEqual(np.asarray(response["predicted_action"]).shape, (1, 7))
 
     def test_dry_run_honors_requested_action_steps_under_server_cap(self):
         with tempfile.TemporaryDirectory() as preview_dir:
@@ -280,7 +281,10 @@ class ProtocolTest(unittest.TestCase):
                     "requested_action_steps": 5,
                 }
             )
-            self.assertEqual(response["predicted_action"].shape, (5, 7))
+            self.assertIsInstance(response["predicted_action"], list)
+            self.assertIsInstance(response["predicted_arm"], list)
+            self.assertIsInstance(response["predicted_gripper"], list)
+            self.assertEqual(np.asarray(response["predicted_action"]).shape, (5, 7))
             self.assertEqual(response["safety"]["returned_steps"], 5)
             self.assertEqual(response["safety"]["requested_action_steps"], 5)
 

@@ -221,7 +221,7 @@ def main():
             conn,
             {
                 "mode": "image-check",
-                "image": encoded,
+                "image": encoded.tobytes(),
                 "color_space": "rgb",
             },
         )

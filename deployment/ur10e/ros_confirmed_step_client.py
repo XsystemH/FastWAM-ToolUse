@@ -96,6 +96,9 @@ class UR10eConfirmedStepClient:
 
         self.bridge = CvBridge()
         self.prompt = prompt
+        self.image_topic = image_topic
+        self.joint_topic = joint_topic
+        self.gripper_topic = gripper_topic
         self.hz = float(hz)
         self.history_size = int(history_size)
         self.jpeg_quality = int(np.clip(jpeg_quality, 1, 100))
@@ -121,6 +124,7 @@ class UR10eConfirmedStepClient:
         self.last_status = "WAITING FOR IMAGE/STATE"
         self.executing_until = 0.0
         self.gripper_timers = []
+        self._received_first_image = False
 
         rospy.Subscriber(image_topic, Image, self._on_image)
         rospy.Subscriber(joint_topic, JointState, self._on_joints)
@@ -128,6 +132,12 @@ class UR10eConfirmedStepClient:
             gripper_topic,
             Robotiq2FGripper_robot_input,
             self._on_gripper,
+        )
+        print(
+            "FASTWAM_CONFIRMED_STEP_STAGE subscriptions_ok "
+            f"image={self.image_topic} joints={self.joint_topic} "
+            f"gripper={self.gripper_topic}",
+            flush=True,
         )
 
         self.joint_pub = None
@@ -161,6 +171,14 @@ class UR10eConfirmedStepClient:
 
     def _on_image(self, message):
         self.live_frame = self.bridge.imgmsg_to_cv2(message, "bgr8")
+        if not self._received_first_image:
+            self._received_first_image = True
+            print(
+                "FASTWAM_CONFIRMED_STEP_STAGE first_image_ok "
+                f"topic={self.image_topic} frame_id={message.header.frame_id} "
+                f"shape={tuple(self.live_frame.shape)} encoding=bgr8",
+                flush=True,
+            )
 
     def _on_joints(self, message):
         positions = dict(zip(message.name, message.position))
@@ -399,7 +417,7 @@ class UR10eConfirmedStepClient:
             [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality],
         )
         if ok:
-            self.img_history.append(encoded)
+            self.img_history.append(encoded.tobytes())
             self.qpos_history.append(current.tolist())
 
     def _draw(self):
@@ -408,7 +426,7 @@ class UR10eConfirmedStepClient:
         local = self.live_frame.copy()
         cv2.putText(
             local,
-            "LOCAL BGR CAMERA",
+            f"LOCAL BGR: {self.image_topic}",
             (15, 30),
             cv2.FONT_HERSHEY_DUPLEX,
             0.7,

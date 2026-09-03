@@ -287,7 +287,7 @@ class UR10eSafeProbeClient:
                     [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality],
                 )
                 if ok:
-                    self.img_history.append(encoded)
+                    self.img_history.append(encoded.tobytes())
                     if self.latest_joints is not None:
                         self.qpos_history.append(
                             list(self.latest_joints) + [self.current_gripper]
