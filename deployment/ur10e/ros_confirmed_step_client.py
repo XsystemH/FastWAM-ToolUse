@@ -123,7 +123,7 @@ class UR10eConfirmedStepClient:
         self.last_rtt_ms = 0.0
         self.last_status = "WAITING FOR IMAGE/STATE"
         self.executing_until = 0.0
-        self.gripper_timers = []
+        self.action_timers = []
         self._received_first_image = False
 
         rospy.Subscriber(image_topic, Image, self._on_image)
@@ -327,24 +327,45 @@ class UR10eConfirmedStepClient:
         command.rPR = int(round(np.clip(value, 0.0, 1.0) * 255))
         self.gripper_pub.publish(command)
 
-    def _schedule_gripper_chunk(self, targets, step_duration):
-        self.gripper_timers = []
+    def _publish_action_step(self, target, step, total_steps, command_duration):
+        trajectory = JointTrajectory()
+        trajectory.joint_names = list(JOINT_ORDER)
+        point = JointTrajectoryPoint()
+        point.positions = target[:6].tolist()
+        point.time_from_start = rospy.Duration(command_duration)
+        trajectory.points.append(point)
+        self.joint_pub.publish(trajectory)
+        self._publish_gripper_once(float(target[6]))
+        print(
+            "FASTWAM_CONFIRMED_CHUNK_STEP "
+            f"step={step}/{total_steps} target={target.round(6).tolist()} "
+            f"command_duration_s={command_duration:.3f}",
+            flush=True,
+        )
+
+    def _schedule_action_chunk(self, targets, command_duration):
+        self.action_timers = []
         total_steps = len(targets)
-        for index, value in enumerate(targets[:, 6], start=1):
-            def publish_gripper(_event, target=float(value), step=index):
-                self._publish_gripper_once(target)
-                print(
-                    "FASTWAM_CONFIRMED_CHUNK_GRIPPER "
-                    f"step={step}/{total_steps} target={target:.6f}",
-                    flush=True,
+        self._publish_action_step(targets[0], 1, total_steps, command_duration)
+        for index, target in enumerate(targets[1:], start=1):
+            def publish_action(
+                _event,
+                scheduled_target=target.copy(),
+                step=index + 1,
+            ):
+                self._publish_action_step(
+                    scheduled_target,
+                    step,
+                    total_steps,
+                    command_duration,
                 )
 
             timer = rospy.Timer(
-                rospy.Duration(index * step_duration),
-                publish_gripper,
+                rospy.Duration(index / self.hz),
+                publish_action,
                 oneshot=True,
             )
-            self.gripper_timers.append(timer)
+            self.action_timers.append(timer)
 
     def _execute_pending_chunk(self):
         if not self.execution_enabled:
@@ -382,18 +403,11 @@ class UR10eConfirmedStepClient:
         self.pending_qpos = None
         self.pending_at = None
 
-        trajectory = JointTrajectory()
-        trajectory.joint_names = list(JOINT_ORDER)
-        step_duration = self.trajectory_duration / self.speed_scale
-        for index, target in enumerate(targets, start=1):
-            point = JointTrajectoryPoint()
-            point.positions = target[:6].tolist()
-            point.time_from_start = rospy.Duration(index * step_duration)
-            trajectory.points.append(point)
-        self.joint_pub.publish(trajectory)
-        self._schedule_gripper_chunk(targets, step_duration)
-        total_duration = len(targets) * step_duration
+        command_duration = self.trajectory_duration / self.speed_scale
+        stream_duration = (len(targets) - 1) / self.hz
+        total_duration = stream_duration + command_duration
         self.executing_until = time.monotonic() + total_duration
+        self._schedule_action_chunk(targets, command_duration)
 
         self.last_status = (
             f"EXECUTING {len(targets)} ACTIONS; inference remains locked until complete"
@@ -401,7 +415,8 @@ class UR10eConfirmedStepClient:
         print(
             "FASTWAM_CONFIRMED_CHUNK_EXECUTED "
             f"steps={len(targets)} targets={targets.round(6).tolist()} "
-            f"step_duration_s={step_duration:.3f} total_duration_s={total_duration:.3f}",
+            f"publish_hz={self.hz:.3f} command_duration_s={command_duration:.3f} "
+            f"total_duration_s={total_duration:.3f}",
             flush=True,
         )
 
@@ -508,7 +523,7 @@ class UR10eConfirmedStepClient:
                 rate.sleep()
         finally:
             self._discard_pending("shutdown")
-            for timer in self.gripper_timers:
+            for timer in self.action_timers:
                 timer.shutdown()
             cv2.destroyAllWindows()
             self.sock.close()
@@ -543,7 +558,7 @@ def parse_args():
     parser.add_argument("--max-state-drift-rad", type=float, default=0.02)
     parser.add_argument("--max-pending-age", type=float, default=5.0)
     parser.add_argument("--trajectory-duration", type=float, default=0.75)
-    parser.add_argument("--speed-scale", type=float, default=0.2)
+    parser.add_argument("--speed-scale", type=float, default=1.0)
     args = parser.parse_args()
     for name in (
         "hz",

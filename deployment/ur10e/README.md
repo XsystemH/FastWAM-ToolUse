@@ -139,7 +139,7 @@ python -u ros_confirmed_step_client.py \
   --max-state-drift-rad 0.02 \
   --max-pending-age 5 \
   --trajectory-duration 0.75 \
-  --speed-scale 0.2
+  --speed-scale 1.0
 ```
 
 `--action-steps` accepts any positive integer, subject to the number of actions
@@ -158,11 +158,19 @@ server with a cap at least as large as the requested chunk, such as
    trajectory is still running.  Candidates older than five seconds, or whose
    robot state drifted more than the configured threshold, are rejected.
 
-The interval between arm trajectory points is
-`trajectory-duration / speed-scale`; the above settings therefore command a
-deliberately slow 3.75 seconds per action.  Gripper targets are scheduled at
-the same point times.  The E gate also refuses to publish unless both ROS
-command topics have subscribers.
+After confirmation, the client follows the reference controller's streaming
+pattern: it publishes one arm-and-gripper target every `1 / hz` seconds.  Each
+arm target has a nominal duration of `trajectory-duration / speed-scale`.
+With the reference-equivalent settings above (`hz=2`, duration 0.75 and speed
+scale 1.0), a new target arrives every 0.5 seconds and overlaps the preceding
+0.75-second command, avoiding a stop at every action.  The E gate also refuses
+to publish unless both ROS command topics have subscribers.
+
+Use a lower `speed-scale` only for an intentionally slow checkout.  For
+example, `speed-scale=0.2` makes every command last 3.75 seconds; together with
+the default 0.05-radian delta limit, motion may be difficult to see.  Do not
+compensate by raising the joint-delta limit before verifying the published
+targets and measured joint-state change.
 
 Holding or repeating E cannot execute another action chunk because the pending
 candidate is consumed before ROS publication.  Execution never requests a

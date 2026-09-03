@@ -168,6 +168,8 @@ class ProtocolTest(unittest.TestCase):
         self.assertIn('key == ord("x")', source)
         self.assertIn("FASTWAM_CONFIRMED_CHUNK_PREPARED execute=false", source)
         self.assertIn("FASTWAM_CONFIRMED_CHUNK_EXECUTED", source)
+        self.assertIn("FASTWAM_CONFIRMED_CHUNK_STEP", source)
+        self.assertIn("index / self.hz", source)
 
         publisher_calls = [
             node
@@ -179,7 +181,7 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(len(publisher_calls), 2)
 
         consume = source.index("self.pending_action = None", source.index("def _execute_pending_chunk"))
-        publish = source.index("self.joint_pub.publish", source.index("def _execute_pending_chunk"))
+        publish = source.index("self._schedule_action_chunk", source.index("def _execute_pending_chunk"))
         self.assertLess(consume, publish)
 
     def test_wire_round_trip(self):
