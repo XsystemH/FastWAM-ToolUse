@@ -174,6 +174,7 @@ def create_fastwam_joint(
     action_scheduler=None,
     loss=None,
     mot_checkpoint_mixed_attn: bool = False,
+    compile_training_denoise: bool = False,
     redirect_common_files: bool = True,
     model_dtype: torch.dtype = torch.bfloat16,
     device: str = "cuda",
@@ -242,6 +243,7 @@ def create_fastwam_joint(
         action_num_train_timesteps=int(action_scheduler["num_train_timesteps"]),
         loss_lambda_video=float(loss.get("lambda_video", 1.0)),
         loss_lambda_action=float(loss.get("lambda_action", 1.0)),
+        compile_training_denoise=bool(compile_training_denoise),
     )
 
 

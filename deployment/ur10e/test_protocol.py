@@ -65,6 +65,18 @@ class FakeEngine:
 
 
 class ProtocolTest(unittest.TestCase):
+    def test_joint_runtime_accepts_training_compile_override(self):
+        runtime_path = Path(__file__).parents[2] / "src/fastwam/runtime.py"
+        runtime_tree = ast.parse(runtime_path.read_text(encoding="utf-8"))
+        factory = next(
+            node
+            for node in runtime_tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "create_fastwam_joint"
+        )
+        argument_names = {argument.arg for argument in factory.args.args}
+        self.assertIn("compile_training_denoise", argument_names)
+
     def test_ros_client_matches_reference_imports_and_is_non_actuating(self):
         source_path = Path(__file__).with_name("ros_safe_client.py")
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
