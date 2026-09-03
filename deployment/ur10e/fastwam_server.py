@@ -19,16 +19,28 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from .protocol import (
-    ACTION_DIM,
-    JOINT_ORDER,
-    encode_preview_jpeg,
-    limit_absolute_actions,
-    parse_observation,
-    recv_message,
-    save_preview,
-    send_message,
-)
+if __package__:
+    from .protocol import (
+        ACTION_DIM,
+        JOINT_ORDER,
+        encode_preview_jpeg,
+        limit_absolute_actions,
+        parse_observation,
+        recv_message,
+        save_preview,
+        send_message,
+    )
+else:
+    from protocol import (  # type: ignore[no-redef]
+        ACTION_DIM,
+        JOINT_ORDER,
+        encode_preview_jpeg,
+        limit_absolute_actions,
+        parse_observation,
+        recv_message,
+        save_preview,
+        send_message,
+    )
 
 LOGGER = logging.getLogger("fastwam.ur10e.server")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
