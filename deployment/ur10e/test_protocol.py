@@ -94,6 +94,8 @@ class ProtocolTest(unittest.TestCase):
             "tcp_connect_ok",
             "first_image_ok",
             "FASTWAM_SAFE_CLIENT_REQUEST_OK",
+            "FASTWAM_SAFE_CLIENT_IMAGE_CHECK_OK",
+            "FASTWAM_SAFE_CLIENT_INFERENCE_OK",
         ):
             self.assertIn(marker, source)
 

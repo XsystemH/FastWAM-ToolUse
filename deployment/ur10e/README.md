@@ -64,6 +64,8 @@ python deployment/ur10e/ros_safe_client.py \
 
 Its window displays the local BGR camera frame beside the server's decoded RGB
 round-trip. Press `q` to exit. It cannot command either the arm or the gripper.
+Successful requests also emit `FASTWAM_SAFE_CLIENT_IMAGE_CHECK_OK execute=false`
+for an auditable text-only acceptance record.
 Like the preserved ROS reference client, `ros_safe_client.py` contains its TCP
 framing and response handling directly, so that file can be copied and run by
 itself in the industrial PC's existing ROS Python environment. It still needs
@@ -106,8 +108,10 @@ python -m deployment.ur10e.safe_probe_client \
 ```
 
 The prediction is returned only as `predicted_action`, `predicted_arm` and
-`predicted_gripper`. A future reviewed commit must add the industrial-PC safety
-controller and any explicit actuation handoff.
+`predicted_gripper`. The live safe client prints the current qpos, finite
+rate-limited prediction, clipping counts and inference latency under the marker
+`FASTWAM_SAFE_CLIENT_INFERENCE_OK execute=false`. A future reviewed commit must
+add the industrial-PC safety controller and any explicit actuation handoff.
 
 ## Static and protocol checks
 

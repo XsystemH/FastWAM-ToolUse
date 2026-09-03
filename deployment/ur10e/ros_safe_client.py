@@ -189,9 +189,36 @@ class UR10eSafeProbeClient:
             )
         if self.mode == "inference-dry-run":
             action = np.asarray(response.get("predicted_action"), dtype=np.float32)
-            finite = bool(action.size and np.isfinite(action).all())
-            self.last_status = f"DRY RUN action={tuple(action.shape)} finite={finite}"
+            if action.ndim != 2 or action.shape[1] != 7 or action.shape[0] < 1:
+                raise RuntimeError(
+                    f"Unexpected predicted_action shape: {tuple(action.shape)}"
+                )
+            if not np.isfinite(action).all():
+                raise RuntimeError("predicted_action contains NaN or infinity")
+            safety = response.get("safety")
+            if not isinstance(safety, dict):
+                raise RuntimeError("Inference response is missing safety metadata")
+            current_qpos = (
+                list(self.qpos_history[-1]) if self.qpos_history else None
+            )
+            print(
+                "FASTWAM_SAFE_CLIENT_INFERENCE_OK "
+                f"execute=false current_qpos={current_qpos} "
+                f"predicted_action={action.round(6).tolist()} "
+                f"returned_steps={safety.get('returned_steps')} "
+                f"clipped_joints={safety.get('clipped_joint_values')} "
+                f"clipped_gripper={safety.get('clipped_gripper_values')} "
+                f"infer_ms={response.get('server_timing', {}).get('infer_ms')}",
+                flush=True,
+            )
+            self.last_status = f"DRY RUN action={tuple(action.shape)} finite=True"
         else:
+            print(
+                "FASTWAM_SAFE_CLIENT_IMAGE_CHECK_OK "
+                f"execute=false shape={response.get('image_shape')} "
+                f"color_space={response.get('color_space')}",
+                flush=True,
+            )
             self.last_status = f"IMAGE CHECK shape={response.get('image_shape')} RGB"
 
     def _draw(self):
