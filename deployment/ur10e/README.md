@@ -188,6 +188,35 @@ Pressing X or Q while a confirmed chunk is being sent drops only the targets
 that have not yet been published.  It does not claim to cancel a target that
 the ROS controller already accepted.
 
+## Continuous reference-style execution
+
+`ros_fast_wam.py` is the continuous counterpart for final deployment.  Its ROS
+loop, S/R/Q state machine, publishers, reset behavior and trajectory timing
+match `references/ur_rtde/ros_control_client_gello.py`.  The only protocol
+adaptations are the FastWAM request mode, prompt, one-step response request,
+`predicted_action` response key and JPEG bytes needed for cross-version NumPy
+compatibility.
+
+```bash
+python -u ros_fast_wam.py \
+  --ip <5090-ip> \
+  --port 9999 \
+  --prompt "pick up the cup" \
+  --image-topic <verified-third-person-rect-topic> \
+  --hz 30 \
+  --history-size 3 \
+  --jpeg-quality 80 \
+  --speed-scale 1.0
+```
+
+The client starts in `IDLE`.  Press S to enter the same continuous
+inference-and-execution loop as the reference client, R to run the reference
+reset procedure, or Q to quit.  Like the reference implementation, this client
+does not query `robot_program_running` or the controller manager before
+publishing.  It also preserves the reference shutdown reset, which opens the
+gripper and commands the initially observed arm pose.  Use the confirmed-step
+client for image/action review before starting this continuous client.
+
 ## Static and protocol checks
 
 ```bash

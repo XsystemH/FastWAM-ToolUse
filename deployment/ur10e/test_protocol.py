@@ -188,6 +188,40 @@ class ProtocolTest(unittest.TestCase):
         consume = source.index("self.pending_action = None", source.index("def _execute_pending_chunk"))
         self.assertLess(consume, arm)
 
+    def test_continuous_client_matches_reference_loop_and_fastwam_protocol(self):
+        source_path = Path(__file__).with_name("ros_fast_wam.py")
+        source = source_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        reference_path = Path(__file__).parents[2] / "references/ur_rtde/ros_control_client_gello.py"
+        reference_tree = ast.parse(reference_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(import_signature(tree), import_signature(reference_tree))
+        for marker in (
+            'self.state == "RUNNING"',
+            'key == ord("s")',
+            'key == ord("r")',
+            'key == ord("q")',
+            '"mode": "inference-dry-run"',
+            '"requested_action_steps": 1',
+            'response.get("predicted_action")',
+            'response.get("execute") is not False',
+            '(1.5 / self.hz_target) / self.speed_scale',
+            'default=30',
+        ):
+            self.assertIn(marker, source)
+        self.assertNotIn("rospy.Timer", source)
+        self.assertNotIn("list_controllers", source)
+        self.assertNotIn("robot_program_running", source)
+
+        publisher_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "Publisher"
+        ]
+        self.assertEqual(len(publisher_calls), 2)
+
     def test_wire_round_trip(self):
         left, right = socket.socketpair()
         try:
