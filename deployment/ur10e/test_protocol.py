@@ -169,7 +169,11 @@ class ProtocolTest(unittest.TestCase):
         self.assertIn("FASTWAM_CONFIRMED_CHUNK_PREPARED execute=false", source)
         self.assertIn("FASTWAM_CONFIRMED_CHUNK_EXECUTED", source)
         self.assertIn("FASTWAM_CONFIRMED_CHUNK_STEP", source)
-        self.assertIn("index / self.hz", source)
+        self.assertIn("(1.5 / self.hz) / self.speed_scale", source)
+        self.assertIn("self._execute_one_reference_cycle()", source)
+        self.assertNotIn("rospy.Timer", source)
+        self.assertNotIn("list_controllers", source)
+        self.assertNotIn("robot_program_running", source)
 
         publisher_calls = [
             node
@@ -180,9 +184,9 @@ class ProtocolTest(unittest.TestCase):
         ]
         self.assertEqual(len(publisher_calls), 2)
 
+        arm = source.index("self.execution_queue.extend", source.index("def _execute_pending_chunk"))
         consume = source.index("self.pending_action = None", source.index("def _execute_pending_chunk"))
-        publish = source.index("self._schedule_action_chunk", source.index("def _execute_pending_chunk"))
-        self.assertLess(consume, publish)
+        self.assertLess(consume, arm)
 
     def test_wire_round_trip(self):
         left, right = socket.socketpair()

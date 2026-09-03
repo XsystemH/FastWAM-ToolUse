@@ -134,11 +134,9 @@ python -u ros_confirmed_step_client.py \
   --image-topic <third-person-camera-image-topic> \
   --action-steps 5 \
   --enable-step-execution \
+  --hz 30 \
   --max-joint-delta-rad 0.05 \
   --max-gripper-delta 0.05 \
-  --max-state-drift-rad 0.02 \
-  --max-pending-age 5 \
-  --trajectory-duration 0.75 \
   --speed-scale 1.0
 ```
 
@@ -151,26 +149,22 @@ server with a cap at least as large as the requested chunk, such as
 1. Press **I** to freeze the current observation, run one inference, and show
    the returned RGB preview and the configured number of client-limited
    candidate actions.  No command is published.
-2. Inspect the image and printed targets, then press **E** once to publish that
-   one pending chunk.  Press **X** to discard it instead.
+2. Inspect the image and printed targets, then press **E** once to arm that one
+   pending chunk.  The main ROS loop publishes one target per iteration, just
+   like the preserved reference client.  Press **X** to discard it instead.
 3. After either E or X, the candidate is cleared.  Another movement requires a
-   fresh I followed by a fresh E.  Inference is also locked while the confirmed
-   trajectory is still running.  Candidates older than five seconds, or whose
-   robot state drifted more than the configured threshold, are rejected.
+   fresh I followed by a fresh E.  Inference is locked until the configured
+   number of action cycles has been sent or interrupted.
 
-After confirmation, the client follows the reference controller's streaming
-pattern: it publishes one arm-and-gripper target every `1 / hz` seconds.  Each
-arm target has a nominal duration of `trajectory-duration / speed-scale`.
-With the reference-equivalent settings above (`hz=2`, duration 0.75 and speed
-scale 1.0), a new target arrives every 0.5 seconds and overlaps the preceding
-0.75-second command, avoiding a stop at every action.  The E gate also refuses
-to publish unless both ROS command topics have subscribers.
+After confirmation, the client follows the reference controller's loop and
+trajectory timing: it publishes one arm-and-gripper target every `1 / hz`
+seconds and gives each arm target a nominal duration of
+`(1.5 / hz) / speed_scale`.  The reference default is 30 Hz, so at speed scale
+1.0 a target is published every 0.033 seconds with a 0.05-second nominal
+duration.
 
-Use a lower `speed-scale` only for an intentionally slow checkout.  For
-example, `speed-scale=0.2` makes every command last 3.75 seconds; together with
-the default 0.05-radian delta limit, motion may be difficult to see.  Do not
-compensate by raising the joint-delta limit before verifying the published
-targets and measured joint-state change.
+Do not compensate for subtle motion by raising the joint-delta limit before
+verifying the published targets and measured joint-state change.
 
 Holding or repeating E cannot execute another action chunk because the pending
 candidate is consumed before ROS publication.  Execution never requests a
@@ -190,10 +184,9 @@ pickled NumPy arrays.  This keeps a NumPy 1.x ROS workstation compatible with a
 NumPy 2.x inference server and avoids `No module named numpy._core` during
 response deserialization.
 
-Once a confirmed chunk has been published, I, X and Q do not interrupt it;
-they remain locked until its nominal trajectory duration has elapsed.  This
-avoids presenting a UI discard or quit as if it had cancelled a trajectory
-that the ROS controller already accepted.
+Pressing X or Q while a confirmed chunk is being sent drops only the targets
+that have not yet been published.  It does not claim to cancel a target that
+the ROS controller already accepted.
 
 ## Static and protocol checks
 

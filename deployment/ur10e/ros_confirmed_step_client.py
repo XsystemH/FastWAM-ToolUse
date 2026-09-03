@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""ROS client that requires a fresh human confirmation for every action chunk.
+"""Reference-style ROS client with a human gate before every action chunk.
 
 The server remains non-authoritative and returns ``execute=false``.  This client
-may locally publish one rate-limited action chunk only when execution was
-explicitly enabled at startup and the operator presses E after reviewing the
-returned image and candidate actions.  The requested chunk length is
-configurable.  The candidate is consumed before publication, so key repeat
-cannot execute another chunk.
+may locally publish one action chunk only when execution was explicitly enabled
+at startup and the operator presses E after reviewing the returned image and
+candidate actions.  Once armed, the main ROS loop publishes exactly one
+single-point arm/gripper target per cycle, matching the preserved reference
+client.  The requested chunk length is configurable and unsent targets can be
+cancelled without claiming that an already-published target was recalled.
 """
 
 import argparse
@@ -85,9 +86,6 @@ class UR10eConfirmedStepClient:
         enable_step_execution,
         max_joint_delta_rad,
         max_gripper_delta,
-        max_state_drift_rad,
-        max_pending_age,
-        trajectory_duration,
         speed_scale,
     ):
         print("FASTWAM_CONFIRMED_STEP_STAGE ros_init_start", flush=True)
@@ -106,10 +104,12 @@ class UR10eConfirmedStepClient:
         self.execution_enabled = bool(enable_step_execution)
         self.max_joint_delta_rad = float(max_joint_delta_rad)
         self.max_gripper_delta = float(max_gripper_delta)
-        self.max_state_drift_rad = float(max_state_drift_rad)
-        self.max_pending_age = float(max_pending_age)
-        self.trajectory_duration = float(trajectory_duration)
-        self.speed_scale = float(speed_scale)
+        self.speed_scale = float(np.clip(speed_scale, 0.01, 1.0))
+        if self.speed_scale != speed_scale:
+            rospy.logwarn(
+                f"Clipped --speed-scale from {speed_scale} to {self.speed_scale}. "
+                "Expected a value in (0, 1]."
+            )
 
         self.live_frame = None
         self.preview_frame = None
@@ -118,12 +118,11 @@ class UR10eConfirmedStepClient:
         self.img_history = deque(maxlen=self.history_size)
         self.qpos_history = deque(maxlen=self.history_size)
         self.pending_action = None
-        self.pending_qpos = None
-        self.pending_at = None
         self.last_rtt_ms = 0.0
         self.last_status = "WAITING FOR IMAGE/STATE"
-        self.executing_until = 0.0
-        self.action_timers = []
+        self.execution_queue = deque()
+        self.execution_total_steps = 0
+        self.execution_next_step = 0
         self._received_first_image = False
 
         rospy.Subscriber(image_topic, Image, self._on_image)
@@ -151,7 +150,7 @@ class UR10eConfirmedStepClient:
             self.gripper_pub = rospy.Publisher(
                 "/Robotiq2FGripperRobotOutput",
                 Robotiq2FGripper_robot_output,
-                queue_size=1,
+                queue_size=10,
             )
 
         print(
@@ -289,9 +288,7 @@ class UR10eConfirmedStepClient:
             raise RuntimeError("Server image preview could not be decoded.")
 
         self.preview_frame = preview
-        self.pending_qpos = current.copy()
         self.pending_action = self._client_limit(targets, current)
-        self.pending_at = time.monotonic()
         self.last_status = "PENDING: inspect image/action, then E execute or X discard"
         print(
             "FASTWAM_CONFIRMED_CHUNK_PREPARED execute=false "
@@ -307,8 +304,6 @@ class UR10eConfirmedStepClient:
     def _discard_pending(self, reason):
         had_pending = self.pending_action is not None
         self.pending_action = None
-        self.pending_qpos = None
-        self.pending_at = None
         self.last_status = f"DISCARDED: {reason}"
         if had_pending:
             print(
@@ -316,7 +311,20 @@ class UR10eConfirmedStepClient:
             )
 
     def _chunk_is_executing(self):
-        return time.monotonic() < self.executing_until
+        return bool(self.execution_queue)
+
+    def _cancel_execution(self, reason):
+        unsent = len(self.execution_queue)
+        self.execution_queue.clear()
+        self.execution_total_steps = 0
+        self.execution_next_step = 0
+        if unsent:
+            self.last_status = f"STOPPED: cancelled {unsent} unsent actions ({reason})"
+            print(
+                "FASTWAM_CONFIRMED_CHUNK_CANCELLED "
+                f"reason={reason} unsent_steps={unsent}",
+                flush=True,
+            )
 
     def _publish_gripper_once(self, value):
         command = Robotiq2FGripper_robot_output()
@@ -327,7 +335,9 @@ class UR10eConfirmedStepClient:
         command.rPR = int(round(np.clip(value, 0.0, 1.0) * 255))
         self.gripper_pub.publish(command)
 
-    def _publish_action_step(self, target, step, total_steps, command_duration):
+    def _publish_action_step(self, target, step, total_steps):
+        # Preserve the reference client's trajectory timing exactly.
+        command_duration = (1.5 / self.hz) / self.speed_scale
         trajectory = JointTrajectory()
         trajectory.joint_names = list(JOINT_ORDER)
         point = JointTrajectoryPoint()
@@ -343,82 +353,50 @@ class UR10eConfirmedStepClient:
             flush=True,
         )
 
-    def _schedule_action_chunk(self, targets, command_duration):
-        self.action_timers = []
-        total_steps = len(targets)
-        self._publish_action_step(targets[0], 1, total_steps, command_duration)
-        for index, target in enumerate(targets[1:], start=1):
-            def publish_action(
-                _event,
-                scheduled_target=target.copy(),
-                step=index + 1,
-            ):
-                self._publish_action_step(
-                    scheduled_target,
-                    step,
-                    total_steps,
-                    command_duration,
-                )
-
-            timer = rospy.Timer(
-                rospy.Duration(index / self.hz),
-                publish_action,
-                oneshot=True,
-            )
-            self.action_timers.append(timer)
-
     def _execute_pending_chunk(self):
         if not self.execution_enabled:
             raise RuntimeError(
                 "Execution is disabled; restart with --enable-step-execution."
             )
-        if self.pending_action is None or self.pending_qpos is None:
+        if self.pending_action is None:
             raise RuntimeError("No pending action; press I to infer first.")
-        age = time.monotonic() - self.pending_at
-        if age > self.max_pending_age:
-            self._discard_pending("stale")
-            raise RuntimeError(
-                f"Pending action expired after {age:.2f}s; press I again."
-            )
-
-        current = self._current_qpos()
-        if current is None:
-            self._discard_pending("joint_state_missing")
-            raise RuntimeError("Current joint state is unavailable.")
-        drift = float(np.max(np.abs(current[:6] - self.pending_qpos[:6])))
-        if drift > self.max_state_drift_rad:
-            self._discard_pending("robot_moved_since_inference")
-            raise RuntimeError(
-                f"Robot drifted {drift:.6f} rad since inference; press I again."
-            )
-        if self.joint_pub.get_num_connections() < 1:
-            raise RuntimeError("Arm command publisher has no controller subscriber.")
-        if self.gripper_pub.get_num_connections() < 1:
-            raise RuntimeError("Gripper publisher has no controller subscriber.")
-
         # Consume the candidate before the first publish.  A repeated E key has
         # nothing to execute, even if ROS publication below raises an exception.
-        targets = self._client_limit(self.pending_action, current)
+        targets = self.pending_action.copy()
         self.pending_action = None
-        self.pending_qpos = None
-        self.pending_at = None
 
-        command_duration = self.trajectory_duration / self.speed_scale
-        stream_duration = (len(targets) - 1) / self.hz
-        total_duration = stream_duration + command_duration
-        self.executing_until = time.monotonic() + total_duration
-        self._schedule_action_chunk(targets, command_duration)
+        self.execution_queue.extend(target.copy() for target in targets)
+        self.execution_total_steps = len(targets)
+        self.execution_next_step = 1
 
         self.last_status = (
-            f"EXECUTING {len(targets)} ACTIONS; inference remains locked until complete"
+            f"ARMED: executing {len(targets)} reference-style action cycles"
         )
         print(
-            "FASTWAM_CONFIRMED_CHUNK_EXECUTED "
+            "FASTWAM_CONFIRMED_CHUNK_ARMED "
             f"steps={len(targets)} targets={targets.round(6).tolist()} "
-            f"publish_hz={self.hz:.3f} command_duration_s={command_duration:.3f} "
-            f"total_duration_s={total_duration:.3f}",
+            f"publish_hz={self.hz:.3f} "
+            f"command_duration_s={(1.5 / self.hz) / self.speed_scale:.3f}",
             flush=True,
         )
+
+    def _execute_one_reference_cycle(self):
+        if not self.execution_queue:
+            return
+        target = self.execution_queue.popleft()
+        step = self.execution_next_step
+        total_steps = self.execution_total_steps
+        self._publish_action_step(target, step, total_steps)
+        self.execution_next_step += 1
+
+        if not self.execution_queue:
+            self.execution_total_steps = 0
+            self.execution_next_step = 0
+            self.last_status = "COMPLETE: press I for a fresh inference"
+            print(
+                f"FASTWAM_CONFIRMED_CHUNK_EXECUTED steps={total_steps}",
+                flush=True,
+            )
 
     def _update_history(self):
         if self.live_frame is None:
@@ -496,6 +474,8 @@ class UR10eConfirmedStepClient:
         try:
             while not rospy.is_shutdown():
                 self._update_history()
+                if self._chunk_is_executing():
+                    self._execute_one_reference_cycle()
                 self._draw()
                 key = cv2.waitKey(1) & 0xFF
                 try:
@@ -506,16 +486,10 @@ class UR10eConfirmedStepClient:
                         self._execute_pending_chunk()
                     elif key == ord("x"):
                         if self._chunk_is_executing():
-                            raise RuntimeError(
-                                "The already-published chunk cannot be discarded; "
-                                "wait for it to finish."
-                            )
+                            self._cancel_execution("operator")
                         self._discard_pending("operator")
                     elif key == ord("q"):
-                        if self._chunk_is_executing():
-                            raise RuntimeError(
-                                "Quit is locked until the confirmed chunk finishes."
-                            )
+                        self._cancel_execution("quit")
                         break
                 except Exception as exc:
                     self.last_status = f"ERROR: {exc}"
@@ -523,8 +497,7 @@ class UR10eConfirmedStepClient:
                 rate.sleep()
         finally:
             self._discard_pending("shutdown")
-            for timer in self.action_timers:
-                timer.shutdown()
+            self._cancel_execution("shutdown")
             cv2.destroyAllWindows()
             self.sock.close()
 
@@ -534,9 +507,9 @@ def parse_args():
     parser.add_argument("--ip", required=True)
     parser.add_argument("--port", type=int, default=9999)
     parser.add_argument("--prompt", default="pick up the cup")
-    parser.add_argument("--hz", type=float, default=2.0)
+    parser.add_argument("--hz", type=float, default=30.0)
     parser.add_argument("--history-size", type=int, default=3)
-    parser.add_argument("--jpeg-quality", type=int, default=90)
+    parser.add_argument("--jpeg-quality", type=int, default=80)
     parser.add_argument("--image-topic", default="/camera/color/image_raw")
     parser.add_argument("--joint-topic", default="/joint_states")
     parser.add_argument(
@@ -555,24 +528,15 @@ def parse_args():
     )
     parser.add_argument("--max-joint-delta-rad", type=float, default=0.05)
     parser.add_argument("--max-gripper-delta", type=float, default=0.05)
-    parser.add_argument("--max-state-drift-rad", type=float, default=0.02)
-    parser.add_argument("--max-pending-age", type=float, default=5.0)
-    parser.add_argument("--trajectory-duration", type=float, default=0.75)
     parser.add_argument("--speed-scale", type=float, default=1.0)
     args = parser.parse_args()
     for name in (
         "hz",
         "max_joint_delta_rad",
         "max_gripper_delta",
-        "max_state_drift_rad",
-        "max_pending_age",
-        "trajectory_duration",
-        "speed_scale",
     ):
         if getattr(args, name) <= 0:
             parser.error(f"--{name.replace('_', '-')} must be positive")
-    if args.speed_scale > 1.0:
-        parser.error("--speed-scale must be at most 1.0")
     if args.history_size <= 0:
         parser.error("--history-size must be positive")
     if args.action_steps <= 0:
@@ -596,9 +560,6 @@ def main():
         enable_step_execution=args.enable_step_execution,
         max_joint_delta_rad=args.max_joint_delta_rad,
         max_gripper_delta=args.max_gripper_delta,
-        max_state_drift_rad=args.max_state_drift_rad,
-        max_pending_age=args.max_pending_age,
-        trajectory_duration=args.trajectory_duration,
         speed_scale=args.speed_scale,
     ).run()
 
