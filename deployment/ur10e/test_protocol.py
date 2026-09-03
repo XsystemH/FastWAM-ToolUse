@@ -41,6 +41,23 @@ def make_args(preview_dir: str, mode: str) -> Namespace:
     )
 
 
+def import_signature(parsed_tree):
+    result = []
+    for node in parsed_tree.body:
+        if isinstance(node, ast.Import):
+            result.append(("import", tuple((alias.name, alias.asname) for alias in node.names)))
+        elif isinstance(node, ast.ImportFrom):
+            result.append(
+                (
+                    "from",
+                    node.level,
+                    node.module,
+                    tuple((alias.name, alias.asname) for alias in node.names),
+                )
+            )
+    return result
+
+
 class FakeEngine:
     def infer(self, image_rgb, qpos, prompt):
         del image_rgb, qpos, prompt
@@ -53,24 +70,6 @@ class ProtocolTest(unittest.TestCase):
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         reference_path = Path(__file__).parents[2] / "references/ur_rtde/ros_control_client_gello.py"
         reference_tree = ast.parse(reference_path.read_text(encoding="utf-8"))
-
-        def import_signature(parsed_tree):
-            result = []
-            for node in parsed_tree.body:
-                if isinstance(node, ast.Import):
-                    result.append(
-                        ("import", tuple((alias.name, alias.asname) for alias in node.names))
-                    )
-                elif isinstance(node, ast.ImportFrom):
-                    result.append(
-                        (
-                            "from",
-                            node.level,
-                            node.module,
-                            tuple((alias.name, alias.asname) for alias in node.names),
-                        )
-                    )
-            return result
 
         self.assertEqual(import_signature(tree), import_signature(reference_tree))
 
@@ -106,6 +105,36 @@ class ProtocolTest(unittest.TestCase):
             and node.func.attr == "Publisher"
         ]
         self.assertEqual(publisher_calls, [])
+
+    def test_ros_diagnostic_matches_reference_imports_and_is_non_actuating(self):
+        source_path = Path(__file__).with_name("ros_safe_diagnostic.py")
+        source = source_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        reference_path = Path(__file__).parents[2] / "references/ur_rtde/ros_control_client_gello.py"
+        reference_tree = ast.parse(reference_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(import_signature(tree), import_signature(reference_tree))
+        self.assertFalse(
+            any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "Publisher"
+                for node in ast.walk(tree)
+            )
+        )
+        for marker in (
+            "master_getpid_start",
+            "master_getpid_ok",
+            "ros_init_start",
+            "ros_init_ok",
+            "subscriptions_ok",
+            "tcp_connect_ok",
+            "first_image_ok",
+            "request_sent",
+            "response_ok",
+            "FASTWAM_ROS_SAFE_DIAGNOSTIC_OK",
+        ):
+            self.assertIn(marker, source)
 
     def test_wire_round_trip(self):
         left, right = socket.socketpair()

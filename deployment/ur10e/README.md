@@ -69,6 +69,18 @@ framing and response handling directly, so that file can be copied and run by
 itself in the industrial PC's existing ROS Python environment. It still needs
 the ROS messages, `cv_bridge`, OpenCV and NumPy already used by the controller.
 
+If ROS initialization or the first image request appears to stall, copy and run
+the separate one-shot diagnostic instead:
+
+```bash
+python -u ros_safe_diagnostic.py --ip <5090-ip> --port 9999
+```
+
+It checks the runtime, hostname lookup, ROS master, node registration, the three
+subscriptions, TCP connection, first image, JPEG encoding and image-check round
+trip in order. An eight-second master/initialization stall prints its Python
+thread stack and exits. It creates no publishers and never requests inference.
+
 ## Dry-run inference
 
 ```bash
