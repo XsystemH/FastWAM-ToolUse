@@ -48,6 +48,9 @@ class FastWAMEngine:
         num_inference_steps: int,
         sigma_shift: float,
         seed: int | None,
+        vae_path: str | None = None,
+        text_encoder_path: str | None = None,
+        tokenizer_path: str | None = None,
     ) -> None:
         import hydra
         import torch
@@ -92,6 +95,12 @@ class FastWAMEngine:
         model_cfg.load_text_encoder = True
         model_cfg.skip_dit_load_from_pretrain = True
         model_cfg.action_dit_pretrained_path = None
+        if vae_path is not None:
+            model_cfg.vae_path = self._require_path(vae_path, "VAE")
+        if text_encoder_path is not None:
+            model_cfg.text_encoder_path = self._require_path(text_encoder_path, "text encoder")
+        if tokenizer_path is not None:
+            model_cfg.tokenizer_path = self._require_path(tokenizer_path, "tokenizer")
         self.model = instantiate(
             model_cfg,
             model_dtype=self.model_dtype,
@@ -116,6 +125,13 @@ class FastWAMEngine:
             model_config,
             self.action_horizon,
         )
+
+    @staticmethod
+    def _require_path(value: str, label: str) -> str:
+        path = Path(value).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"{label} path not found: {path}")
+        return str(path)
 
     def _normalize_state(self, qpos: np.ndarray):
         torch = self._torch
@@ -322,6 +338,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-payload-mib", type=int, default=64)
     parser.add_argument("--checkpoint")
     parser.add_argument("--dataset-stats")
+    parser.add_argument("--vae-path")
+    parser.add_argument("--text-encoder-path")
+    parser.add_argument("--tokenizer-path")
     parser.add_argument("--task-config", default="ur_robotiq_uncond_1cam224")
     parser.add_argument("--model-config", default="fastwam_joint")
     parser.add_argument("--device", default="cuda:0")
@@ -356,6 +375,9 @@ def main() -> None:
             num_inference_steps=args.num_inference_steps,
             sigma_shift=args.sigma_shift,
             seed=args.seed,
+            vae_path=args.vae_path,
+            text_encoder_path=args.text_encoder_path,
+            tokenizer_path=args.tokenizer_path,
         )
     StagedUR10eServer(args, engine).serve_forever()
 

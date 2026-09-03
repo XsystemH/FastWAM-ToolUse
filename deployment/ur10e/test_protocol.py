@@ -76,6 +76,9 @@ class ProtocolTest(unittest.TestCase):
         )
         argument_names = {argument.arg for argument in factory.args.args}
         self.assertIn("compile_training_denoise", argument_names)
+        self.assertIn("vae_path", argument_names)
+        self.assertIn("text_encoder_path", argument_names)
+        self.assertIn("tokenizer_path", argument_names)
 
     def test_ros_client_matches_reference_imports_and_is_non_actuating(self):
         source_path = Path(__file__).with_name("ros_safe_client.py")

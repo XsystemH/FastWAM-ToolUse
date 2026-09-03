@@ -148,6 +148,9 @@ def load_wan22_ti2v_5b_components(
     dit_config: dict[str, Any] | None = None,
     skip_dit_load_from_pretrain: bool = False,
     load_text_encoder: bool = True,
+    vae_path: str | None = None,
+    text_encoder_path: str | None = None,
+    tokenizer_path: str | None = None,
 ):
     logger.info("Loading Wan2.2-TI2V-5B components...")
     start = time.time()
@@ -161,6 +164,15 @@ def load_wan22_ti2v_5b_components(
         tokenizer_model_id=tokenizer_model_id,
         redirect_common_files=redirect_common_files,
     )
+
+    # Explicit component paths let deployment machines reuse an existing Wan
+    # cache without consulting a model registry or duplicating large files.
+    if vae_path is not None:
+        vae_config = ModelConfig(path=vae_path)
+    if text_encoder_path is not None:
+        text_config = ModelConfig(path=text_encoder_path)
+    if tokenizer_path is not None:
+        tokenizer_config = ModelConfig(path=tokenizer_path)
 
     vae_config.download_if_necessary()
     if load_text_encoder:

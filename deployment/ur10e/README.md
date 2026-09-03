@@ -90,11 +90,18 @@ python -m deployment.ur10e.fastwam_server \
   --mode inference-dry-run \
   --checkpoint /path/to/step_020000.pt \
   --dataset-stats /path/to/dataset_stats.json \
+  --vae-path /existing/cache/Wan2.2_VAE.safetensors \
+  --text-encoder-path /existing/cache/models_t5_umt5-xxl-enc-bf16.pth \
+  --tokenizer-path /existing/cache/google/umt5-xxl \
   --task-config ur_robotiq_uncond_1cam224 \
   --model-config fastwam_joint \
   --max-response-steps 1 \
   --max-joint-delta-rad 0.05
 ```
+
+The three component-path options are optional. When supplied, they are checked
+before model construction and used directly, so a deployment host can reuse a
+known local Wan cache without contacting ModelScope or Hugging Face.
 
 Then submit a non-actuating probe with the current seven-value state:
 

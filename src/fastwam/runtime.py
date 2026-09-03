@@ -88,6 +88,9 @@ def create_fastwam(
     loss=None,
     mot_checkpoint_mixed_attn: bool = False,
     compile_training_denoise: bool = False,
+    vae_path: str | None = None,
+    text_encoder_path: str | None = None,
+    tokenizer_path: str | None = None,
     redirect_common_files: bool = True,
     model_dtype: torch.dtype = torch.bfloat16,
     device: str = "cuda",
@@ -157,6 +160,9 @@ def create_fastwam(
         loss_lambda_video=float(loss.get("lambda_video", 1.0)),
         loss_lambda_action=float(loss.get("lambda_action", 1.0)),
         compile_training_denoise=bool(compile_training_denoise),
+        vae_path=vae_path,
+        text_encoder_path=text_encoder_path,
+        tokenizer_path=tokenizer_path,
     )
 
 
@@ -175,6 +181,9 @@ def create_fastwam_joint(
     loss=None,
     mot_checkpoint_mixed_attn: bool = False,
     compile_training_denoise: bool = False,
+    vae_path: str | None = None,
+    text_encoder_path: str | None = None,
+    tokenizer_path: str | None = None,
     redirect_common_files: bool = True,
     model_dtype: torch.dtype = torch.bfloat16,
     device: str = "cuda",
@@ -244,6 +253,9 @@ def create_fastwam_joint(
         loss_lambda_video=float(loss.get("lambda_video", 1.0)),
         loss_lambda_action=float(loss.get("lambda_action", 1.0)),
         compile_training_denoise=bool(compile_training_denoise),
+        vae_path=vae_path,
+        text_encoder_path=text_encoder_path,
+        tokenizer_path=tokenizer_path,
     )
 
 
