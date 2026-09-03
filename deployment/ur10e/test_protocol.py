@@ -86,6 +86,18 @@ class ProtocolTest(unittest.TestCase):
         }
         self.assertTrue({"recv_exact", "recv_message", "send_message"} <= function_names)
 
+        source = source_path.read_text(encoding="utf-8")
+        for marker in (
+            "standard_imports_ok",
+            "reference_imports_ok",
+            "ros_init_ok",
+            "subscriptions_ok",
+            "tcp_connect_ok",
+            "first_image_ok",
+            "FASTWAM_SAFE_CLIENT_REQUEST_OK",
+        ):
+            self.assertIn(marker, source)
+
         publisher_calls = [
             node
             for node in ast.walk(tree)

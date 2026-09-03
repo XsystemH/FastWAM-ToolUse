@@ -218,6 +218,12 @@ class StagedUR10eServer:
         if self.args.mode == "image-check":
             obs = parse_observation(data, require_state=False, require_prompt=False)
             preview_path = save_preview(obs.image_rgb, self._preview_path())
+            LOGGER.info(
+                "FASTWAM_IMAGE_CHECK_OK request=%d shape=%s preview=%s execute=false",
+                self.request_count,
+                tuple(int(v) for v in obs.image_rgb.shape),
+                preview_path,
+            )
             return {
                 "ok": True,
                 "mode": "image_check",

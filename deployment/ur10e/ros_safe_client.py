@@ -8,6 +8,8 @@ import struct
 import time
 from collections import deque
 
+print("FASTWAM_SAFE_CLIENT_STAGE standard_imports_ok", flush=True)
+
 import cv2
 import numpy as np
 import rospy
@@ -18,6 +20,8 @@ from robotiq_2f_gripper_control.msg import (
 )
 from sensor_msgs.msg import Image, JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
+print("FASTWAM_SAFE_CLIENT_STAGE reference_imports_ok", flush=True)
 
 
 JOINT_ORDER = (
@@ -76,8 +80,13 @@ class UR10eSafeProbeClient:
         hz,
         history_size,
         jpeg_quality,
+        image_topic,
+        joint_topic,
+        gripper_topic,
     ):
-        rospy.init_node("fastwam_ur10e_safe_probe")
+        print("FASTWAM_SAFE_CLIENT_STAGE ros_init_start", flush=True)
+        rospy.init_node("fastwam_ur10e_safe_probe", anonymous=True)
+        print("FASTWAM_SAFE_CLIENT_STAGE ros_init_ok", flush=True)
         self.bridge = CvBridge()
         self.mode = mode
         self.prompt = prompt
@@ -93,21 +102,44 @@ class UR10eSafeProbeClient:
         self.qpos_history = deque(maxlen=self.history_size)
         self.last_rtt_ms = 0.0
         self.last_status = "WAITING"
+        self.image_topic = image_topic
+        self.joint_topic = joint_topic
+        self.gripper_topic = gripper_topic
+        self._received_first_image = False
+        self._waiting_for_image_logged = False
 
         # Deliberately no rospy.Publisher is constructed in this class.
-        rospy.Subscriber("/camera/color/image_raw", Image, self._on_image)
-        rospy.Subscriber("/joint_states", JointState, self._on_joints)
+        rospy.Subscriber(self.image_topic, Image, self._on_image)
+        rospy.Subscriber(self.joint_topic, JointState, self._on_joints)
         rospy.Subscriber(
-            "/Robotiq2FGripperRobotInput",
+            self.gripper_topic,
             Robotiq2FGripper_robot_input,
             self._on_gripper,
         )
+        print(
+            "FASTWAM_SAFE_CLIENT_STAGE subscriptions_ok "
+            f"image={self.image_topic} joints={self.joint_topic} "
+            f"gripper={self.gripper_topic}",
+            flush=True,
+        )
 
+        print(
+            f"FASTWAM_SAFE_CLIENT_STAGE tcp_connect_start server={server_ip}:{int(port)}",
+            flush=True,
+        )
         self.sock = socket.create_connection((server_ip, int(port)), timeout=30.0)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        print("FASTWAM_SAFE_CLIENT_STAGE tcp_connect_ok", flush=True)
 
     def _on_image(self, message):
         self.live_frame = self.bridge.imgmsg_to_cv2(message, "bgr8")
+        if not self._received_first_image:
+            self._received_first_image = True
+            print(
+                "FASTWAM_SAFE_CLIENT_STAGE first_image_ok "
+                f"shape={tuple(self.live_frame.shape)} encoding=bgr8",
+                flush=True,
+            )
 
     def _on_joints(self, message):
         positions = dict(zip(message.name, message.position))
@@ -141,6 +173,11 @@ class UR10eSafeProbeClient:
         send_message(self.sock, request)
         response = self._validate_response(recv_message(self.sock))
         self.last_rtt_ms = (time.perf_counter() - started) * 1000.0
+        print(
+            "FASTWAM_SAFE_CLIENT_REQUEST_OK "
+            f"mode={self.mode} rtt_ms={self.last_rtt_ms:.1f} execute=false",
+            flush=True,
+        )
         return response
 
     def _update_preview(self, response):
@@ -199,9 +236,21 @@ class UR10eSafeProbeClient:
         try:
             while not rospy.is_shutdown():
                 if self.live_frame is None:
+                    if not self._waiting_for_image_logged:
+                        self._waiting_for_image_logged = True
+                        print(
+                            "FASTWAM_SAFE_CLIENT_WAITING "
+                            f"reason=no_image topic={self.image_topic}",
+                            flush=True,
+                        )
                     rate.sleep()
                     continue
                 if self.mode == "inference-dry-run" and self.latest_joints is None:
+                    rospy.logwarn_throttle(
+                        5.0,
+                        "FASTWAM_SAFE_CLIENT_WAITING reason=no_joint_state "
+                        f"topic={self.joint_topic}",
+                    )
                     rate.sleep()
                     continue
 
@@ -245,6 +294,12 @@ def parse_args():
     parser.add_argument("--hz", type=float, default=2.0)
     parser.add_argument("--history-size", type=int, default=3)
     parser.add_argument("--jpeg-quality", type=int, default=90)
+    parser.add_argument("--image-topic", default="/camera/color/image_raw")
+    parser.add_argument("--joint-topic", default="/joint_states")
+    parser.add_argument(
+        "--gripper-topic",
+        default="/Robotiq2FGripperRobotInput",
+    )
     return parser.parse_args()
 
 
@@ -258,6 +313,9 @@ def main():
         hz=args.hz,
         history_size=args.history_size,
         jpeg_quality=args.jpeg_quality,
+        image_topic=args.image_topic,
+        joint_topic=args.joint_topic,
+        gripper_topic=args.gripper_topic,
     ).run()
 
 
