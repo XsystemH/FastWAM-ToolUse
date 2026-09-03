@@ -120,6 +120,60 @@ rate-limited prediction, clipping counts and inference latency under the marker
 `FASTWAM_SAFE_CLIENT_INFERENCE_OK execute=false`. A future reviewed commit must
 add the industrial-PC safety controller and any explicit actuation handoff.
 
+## Human-confirmed action-chunk execution
+
+Keep `ros_safe_client.py` for image and inference review.  The separate
+`ros_confirmed_step_client.py` is the only client in this directory that can
+create command publishers, and only when explicitly enabled at startup:
+
+```bash
+python -u ros_confirmed_step_client.py \
+  --ip <5090-ip> \
+  --port 9999 \
+  --prompt "pick up the cup" \
+  --action-steps 5 \
+  --enable-step-execution \
+  --max-joint-delta-rad 0.05 \
+  --max-gripper-delta 0.05 \
+  --max-state-drift-rad 0.02 \
+  --max-pending-age 5 \
+  --trajectory-duration 0.75 \
+  --speed-scale 0.2
+```
+
+`--action-steps` accepts any positive integer, subject to the number of actions
+produced by the model and the 5090 server's explicit safety cap.  For example,
+use `--action-steps 10` to review and authorize ten actions.  Start the 5090
+server with a cap at least as large as the requested chunk, such as
+`--max-response-steps 10`.  The operator workflow is deliberately two-stage:
+
+1. Press **I** to freeze the current observation, run one inference, and show
+   the returned RGB preview and the configured number of client-limited
+   candidate actions.  No command is published.
+2. Inspect the image and printed targets, then press **E** once to publish that
+   one pending chunk.  Press **X** to discard it instead.
+3. After either E or X, the candidate is cleared.  Another movement requires a
+   fresh I followed by a fresh E.  Inference is also locked while the confirmed
+   trajectory is still running.  Candidates older than five seconds, or whose
+   robot state drifted more than the configured threshold, are rejected.
+
+The interval between arm trajectory points is
+`trajectory-duration / speed-scale`; the above settings therefore command a
+deliberately slow 3.75 seconds per action.  Gripper targets are scheduled at
+the same point times.  The E gate also refuses to publish unless both ROS
+command topics have subscribers.
+
+Holding or repeating E cannot execute another action chunk because the pending
+candidate is consumed before ROS publication.  Execution never requests a
+second inference automatically.  Omitting
+`--enable-step-execution` leaves the same interface available for rehearsal but
+does not create command publishers.
+
+Once a confirmed chunk has been published, I, X and Q do not interrupt it;
+they remain locked until its nominal trajectory duration has elapsed.  This
+avoids presenting a UI discard or quit as if it had cancelled a trajectory
+that the ROS controller already accepted.
+
 ## Static and protocol checks
 
 ```bash

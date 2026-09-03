@@ -266,12 +266,22 @@ class StagedUR10eServer:
         if self.engine is None:
             raise RuntimeError("Inference engine is unavailable.")
         obs = parse_observation(data, default_prompt=self.args.prompt)
+        requested_steps = data.get("requested_action_steps", self.args.max_response_steps)
+        if isinstance(requested_steps, bool) or not isinstance(requested_steps, int):
+            raise ValueError("requested_action_steps must be an integer.")
+        if requested_steps <= 0:
+            raise ValueError("requested_action_steps must be positive.")
+        if requested_steps > self.args.max_response_steps:
+            raise ValueError(
+                f"requested_action_steps={requested_steps} exceeds the server cap "
+                f"of {self.args.max_response_steps}."
+            )
         started = time.perf_counter()
         predicted = self.engine.infer(obs.image_rgb, obs.qpos, obs.prompt)
         safe = limit_absolute_actions(
             predicted,
             current_qpos=obs.qpos,
-            max_response_steps=self.args.max_response_steps,
+            max_response_steps=requested_steps,
             max_joint_delta_rad=self.args.max_joint_delta_rad,
         )
         return {
@@ -289,6 +299,8 @@ class StagedUR10eServer:
             "safety": {
                 "source_shape": safe.source_shape,
                 "returned_steps": safe.returned_steps,
+                "requested_action_steps": requested_steps,
+                "server_max_response_steps": self.args.max_response_steps,
                 "max_joint_delta_rad": self.args.max_joint_delta_rad,
                 "clipped_joint_values": safe.clipped_joint_values,
                 "clipped_gripper_values": safe.clipped_gripper_values,
@@ -365,6 +377,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.max_payload_mib <= 0:
         parser.error("--max-payload-mib must be positive")
+    if args.max_response_steps <= 0:
+        parser.error("--max-response-steps must be positive")
     if args.mode == "inference-dry-run" and not (args.checkpoint and args.dataset_stats):
         parser.error("inference-dry-run requires --checkpoint and --dataset-stats")
     return args

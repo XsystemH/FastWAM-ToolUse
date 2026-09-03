@@ -153,6 +153,35 @@ class ProtocolTest(unittest.TestCase):
         ):
             self.assertIn(marker, source)
 
+    def test_confirmed_client_has_two_gates_and_configurable_chunk(self):
+        source_path = Path(__file__).with_name("ros_confirmed_step_client.py")
+        source = source_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        reference_path = Path(__file__).parents[2] / "references/ur_rtde/ros_control_client_gello.py"
+        reference_tree = ast.parse(reference_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(import_signature(tree), import_signature(reference_tree))
+        self.assertIn("--enable-step-execution", source)
+        self.assertIn("--action-steps", source)
+        self.assertIn('key == ord("i")', source)
+        self.assertIn('key == ord("e")', source)
+        self.assertIn('key == ord("x")', source)
+        self.assertIn("FASTWAM_CONFIRMED_CHUNK_PREPARED execute=false", source)
+        self.assertIn("FASTWAM_CONFIRMED_CHUNK_EXECUTED", source)
+
+        publisher_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "Publisher"
+        ]
+        self.assertEqual(len(publisher_calls), 2)
+
+        consume = source.index("self.pending_action = None", source.index("def _execute_pending_chunk"))
+        publish = source.index("self.joint_pub.publish", source.index("def _execute_pending_chunk"))
+        self.assertLess(consume, publish)
+
     def test_wire_round_trip(self):
         left, right = socket.socketpair()
         try:
@@ -196,6 +225,15 @@ class ProtocolTest(unittest.TestCase):
         np.testing.assert_allclose(safe.actions[0, :6], [0.05, -0.05, 0.01, 0, 0, 0])
         self.assertEqual(float(safe.actions[0, -1]), 1.0)
 
+    def test_action_chunk_is_rate_limited_sequentially(self):
+        safe = limit_absolute_actions(
+            np.ones((3, 7), dtype=np.float32),
+            current_qpos=np.zeros(7, dtype=np.float32),
+            max_response_steps=3,
+            max_joint_delta_rad=0.05,
+        )
+        np.testing.assert_allclose(safe.actions[:, 0], [0.05, 0.10, 0.15])
+
     def test_nonfinite_action_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "NaN or infinity"):
             limit_absolute_actions(
@@ -228,6 +266,39 @@ class ProtocolTest(unittest.TestCase):
             self.assertIs(response["execute"], False)
             self.assertFalse({"action", "arm", "gripper"}.intersection(response))
             self.assertEqual(response["predicted_action"].shape, (1, 7))
+
+    def test_dry_run_honors_requested_action_steps_under_server_cap(self):
+        with tempfile.TemporaryDirectory() as preview_dir:
+            args = make_args(preview_dir, "inference-dry-run")
+            args.max_response_steps = 10
+            server = StagedUR10eServer(args, FakeEngine())
+            response = server.handle_request(
+                {
+                    "image": make_png(),
+                    "qpos": np.zeros(7, dtype=np.float32),
+                    "prompt": "pick up the cup",
+                    "requested_action_steps": 5,
+                }
+            )
+            self.assertEqual(response["predicted_action"].shape, (5, 7))
+            self.assertEqual(response["safety"]["returned_steps"], 5)
+            self.assertEqual(response["safety"]["requested_action_steps"], 5)
+
+    def test_dry_run_rejects_requested_action_steps_above_server_cap(self):
+        with tempfile.TemporaryDirectory() as preview_dir:
+            server = StagedUR10eServer(
+                make_args(preview_dir, "inference-dry-run"),
+                FakeEngine(),
+            )
+            with self.assertRaisesRegex(ValueError, "exceeds the server cap"):
+                server.handle_request(
+                    {
+                        "image": make_png(),
+                        "qpos": np.zeros(7, dtype=np.float32),
+                        "prompt": "pick up the cup",
+                        "requested_action_steps": 5,
+                    }
+                )
 
 
 if __name__ == "__main__":
