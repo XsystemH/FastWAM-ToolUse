@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import pickle
 import socket
+import struct
 import time
 from collections import deque
 from typing import Any
@@ -16,7 +18,48 @@ from cv_bridge import CvBridge
 from robotiq_2f_gripper_control.msg import Robotiq2FGripper_robot_input
 from sensor_msgs.msg import Image, JointState
 
-from .protocol import JOINT_ORDER, recv_message, send_message
+
+JOINT_ORDER = (
+    "shoulder_pan_joint",
+    "shoulder_lift_joint",
+    "elbow_joint",
+    "wrist_1_joint",
+    "wrist_2_joint",
+    "wrist_3_joint",
+)
+HEADER_STRUCT = struct.Struct("Q")
+MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
+
+
+def recv_exact(conn: socket.socket, size: int) -> bytes:
+    """Receive exactly ``size`` bytes or fail on a closed connection."""
+    chunks: list[bytes] = []
+    remaining = int(size)
+    while remaining > 0:
+        chunk = conn.recv(min(65536, remaining))
+        if not chunk:
+            raise ConnectionError("Socket closed while receiving payload.")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def recv_message(conn: socket.socket) -> Any:
+    """Receive one response using the reference client's native-Q framing."""
+    header = recv_exact(conn, HEADER_STRUCT.size)
+    payload_size = int(HEADER_STRUCT.unpack(header)[0])
+    if payload_size <= 0 or payload_size > MAX_PAYLOAD_BYTES:
+        raise ValueError(
+            f"Invalid payload size {payload_size}; allowed range is "
+            f"1..{MAX_PAYLOAD_BYTES} bytes."
+        )
+    return pickle.loads(recv_exact(conn, payload_size))
+
+
+def send_message(conn: socket.socket, value: Any) -> None:
+    """Send one request using the reference client's native-Q framing."""
+    payload = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+    conn.sendall(HEADER_STRUCT.pack(len(payload)) + payload)
 
 
 class UR10eSafeProbeClient:

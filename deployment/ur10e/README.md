@@ -56,7 +56,7 @@ and gripper topics as the reference controller, but deliberately constructs no
 command publisher:
 
 ```bash
-python -m deployment.ur10e.ros_safe_client \
+python deployment/ur10e/ros_safe_client.py \
   --ip <5090-ip> \
   --mode image-check \
   --hz 2
@@ -64,20 +64,10 @@ python -m deployment.ur10e.ros_safe_client \
 
 Its window displays the local BGR camera frame beside the server's decoded RGB
 round-trip. Press `q` to exit. It cannot command either the arm or the gripper.
-
-On the ROS industrial PC, use the live safe probe instead. It subscribes to the
-same camera, joint-state and gripper-state topics as the reference client, but
-constructs no command publishers:
-
-```bash
-python -m deployment.ur10e.ros_safe_client \
-  --ip <5090-ip> \
-  --mode image-check \
-  --hz 2
-```
-
-Its window shows the local camera frame and the server-decoded RGB round trip
-side by side. Press `q` to quit.
+Like the preserved ROS reference client, `ros_safe_client.py` contains its TCP
+framing and response handling directly, so that file can be copied and run by
+itself in the industrial PC's existing ROS Python environment. It still needs
+the ROS messages, `cv_bridge`, OpenCV and NumPy already used by the controller.
 
 ## Dry-run inference
 

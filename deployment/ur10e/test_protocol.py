@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import io
 import socket
 import tempfile
@@ -47,6 +48,31 @@ class FakeEngine:
 
 
 class ProtocolTest(unittest.TestCase):
+    def test_ros_client_is_standalone_and_non_actuating(self):
+        source_path = Path(__file__).with_name("ros_safe_client.py")
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+
+        relative_imports = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.level > 0
+        ]
+        self.assertEqual(relative_imports, [])
+
+        function_names = {
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        }
+        self.assertTrue({"recv_exact", "recv_message", "send_message"} <= function_names)
+
+        publisher_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "Publisher"
+        ]
+        self.assertEqual(publisher_calls, [])
+
     def test_wire_round_trip(self):
         left, right = socket.socketpair()
         try:
