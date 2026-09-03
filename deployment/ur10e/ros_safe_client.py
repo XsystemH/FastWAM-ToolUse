@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 """Live ROS camera/state probe that cannot publish commands to the UR10e."""
 
-from __future__ import annotations
-
 import argparse
 import pickle
 import socket
 import struct
 import time
 from collections import deque
-from typing import Any
 
 import cv2
 import numpy as np
 import rospy
 from cv_bridge import CvBridge
-from robotiq_2f_gripper_control.msg import Robotiq2FGripper_robot_input
+from robotiq_2f_gripper_control.msg import (
+    Robotiq2FGripper_robot_input,
+    Robotiq2FGripper_robot_output,
+)
 from sensor_msgs.msg import Image, JointState
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 
 JOINT_ORDER = (
@@ -31,9 +32,9 @@ HEADER_STRUCT = struct.Struct("Q")
 MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
 
 
-def recv_exact(conn: socket.socket, size: int) -> bytes:
+def recv_exact(conn, size):
     """Receive exactly ``size`` bytes or fail on a closed connection."""
-    chunks: list[bytes] = []
+    chunks = []
     remaining = int(size)
     while remaining > 0:
         chunk = conn.recv(min(65536, remaining))
@@ -44,7 +45,7 @@ def recv_exact(conn: socket.socket, size: int) -> bytes:
     return b"".join(chunks)
 
 
-def recv_message(conn: socket.socket) -> Any:
+def recv_message(conn):
     """Receive one response using the reference client's native-Q framing."""
     header = recv_exact(conn, HEADER_STRUCT.size)
     payload_size = int(HEADER_STRUCT.unpack(header)[0])
@@ -56,7 +57,7 @@ def recv_message(conn: socket.socket) -> Any:
     return pickle.loads(recv_exact(conn, payload_size))
 
 
-def send_message(conn: socket.socket, value: Any) -> None:
+def send_message(conn, value):
     """Send one request using the reference client's native-Q framing."""
     payload = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
     conn.sendall(HEADER_STRUCT.pack(len(payload)) + payload)
@@ -68,14 +69,14 @@ class UR10eSafeProbeClient:
     def __init__(
         self,
         *,
-        server_ip: str,
-        port: int,
-        mode: str,
-        prompt: str,
-        hz: float,
-        history_size: int,
-        jpeg_quality: int,
-    ) -> None:
+        server_ip,
+        port,
+        mode,
+        prompt,
+        hz,
+        history_size,
+        jpeg_quality,
+    ):
         rospy.init_node("fastwam_ur10e_safe_probe")
         self.bridge = CvBridge()
         self.mode = mode
@@ -84,12 +85,12 @@ class UR10eSafeProbeClient:
         self.history_size = int(history_size)
         self.jpeg_quality = int(np.clip(jpeg_quality, 1, 100))
 
-        self.live_frame: np.ndarray | None = None
-        self.preview_frame: np.ndarray | None = None
-        self.latest_joints: list[float] | None = None
+        self.live_frame = None
+        self.preview_frame = None
+        self.latest_joints = None
         self.current_gripper = 0.0
-        self.img_history: deque[np.ndarray] = deque(maxlen=self.history_size)
-        self.qpos_history: deque[list[float]] = deque(maxlen=self.history_size)
+        self.img_history = deque(maxlen=self.history_size)
+        self.qpos_history = deque(maxlen=self.history_size)
         self.last_rtt_ms = 0.0
         self.last_status = "WAITING"
 
@@ -105,19 +106,19 @@ class UR10eSafeProbeClient:
         self.sock = socket.create_connection((server_ip, int(port)), timeout=30.0)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-    def _on_image(self, message: Image) -> None:
+    def _on_image(self, message):
         self.live_frame = self.bridge.imgmsg_to_cv2(message, "bgr8")
 
-    def _on_joints(self, message: JointState) -> None:
+    def _on_joints(self, message):
         positions = dict(zip(message.name, message.position))
         if all(name in positions for name in JOINT_ORDER):
             self.latest_joints = [float(positions[name]) for name in JOINT_ORDER]
 
-    def _on_gripper(self, message: Robotiq2FGripper_robot_input) -> None:
+    def _on_gripper(self, message):
         self.current_gripper = float(message.gPO) / 255.0
 
     @staticmethod
-    def _validate_response(response: Any) -> dict[str, Any]:
+    def _validate_response(response):
         if not isinstance(response, dict):
             raise RuntimeError(f"Unexpected response type: {type(response).__name__}")
         if response.get("execute") is not False:
@@ -129,7 +130,7 @@ class UR10eSafeProbeClient:
             raise RuntimeError(str(response.get("error", "Unknown server error")))
         return response
 
-    def _request(self) -> dict[str, Any]:
+    def _request(self):
         request = {
             "mode": self.mode,
             "img_history": list(self.img_history),
@@ -142,7 +143,7 @@ class UR10eSafeProbeClient:
         self.last_rtt_ms = (time.perf_counter() - started) * 1000.0
         return response
 
-    def _update_preview(self, response: dict[str, Any]) -> None:
+    def _update_preview(self, response):
         encoded = response.get("preview_jpeg")
         if encoded:
             self.preview_frame = cv2.imdecode(
@@ -156,7 +157,7 @@ class UR10eSafeProbeClient:
         else:
             self.last_status = f"IMAGE CHECK shape={response.get('image_shape')} RGB"
 
-    def _draw(self) -> None:
+    def _draw(self):
         if self.live_frame is None:
             return
         local = self.live_frame.copy()
@@ -193,7 +194,7 @@ class UR10eSafeProbeClient:
         )
         cv2.imshow("FastWAM UR10e Safe Probe", display)
 
-    def run(self) -> None:
+    def run(self):
         rate = rospy.Rate(self.hz)
         try:
             while not rospy.is_shutdown():
@@ -231,7 +232,7 @@ class UR10eSafeProbeClient:
             self.sock.close()
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ip", required=True)
     parser.add_argument("--port", type=int, default=9999)
@@ -247,7 +248,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
+def main():
     args = parse_args()
     UR10eSafeProbeClient(
         server_ip=args.ip,

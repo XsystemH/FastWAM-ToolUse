@@ -48,9 +48,31 @@ class FakeEngine:
 
 
 class ProtocolTest(unittest.TestCase):
-    def test_ros_client_is_standalone_and_non_actuating(self):
+    def test_ros_client_matches_reference_imports_and_is_non_actuating(self):
         source_path = Path(__file__).with_name("ros_safe_client.py")
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        reference_path = Path(__file__).parents[2] / "references/ur_rtde/ros_control_client_gello.py"
+        reference_tree = ast.parse(reference_path.read_text(encoding="utf-8"))
+
+        def import_signature(parsed_tree):
+            result = []
+            for node in parsed_tree.body:
+                if isinstance(node, ast.Import):
+                    result.append(
+                        ("import", tuple((alias.name, alias.asname) for alias in node.names))
+                    )
+                elif isinstance(node, ast.ImportFrom):
+                    result.append(
+                        (
+                            "from",
+                            node.level,
+                            node.module,
+                            tuple((alias.name, alias.asname) for alias in node.names),
+                        )
+                    )
+            return result
+
+        self.assertEqual(import_signature(tree), import_signature(reference_tree))
 
         relative_imports = [
             node
