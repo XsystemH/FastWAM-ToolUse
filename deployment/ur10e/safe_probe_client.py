@@ -11,7 +11,10 @@ from typing import Any
 
 import numpy as np
 
-from .protocol import recv_message, send_message
+if __package__:
+    from .protocol import recv_message, send_message
+else:
+    from protocol import recv_message, send_message  # type: ignore[no-redef]
 
 
 def _jsonable(value: Any) -> Any:
