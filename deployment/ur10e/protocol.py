@@ -90,13 +90,8 @@ def decode_image(value: Any, *, color_space: str = "rgb") -> np.ndarray:
     encoded: bytes | None = None
     if isinstance(value, (bytes, bytearray, memoryview)):
         encoded = bytes(value)
-    elif isinstance(value, np.ndarray) and (
-        value.ndim == 1
-        or (value.ndim == 2 and 1 in value.shape)
-    ):
-        # OpenCV commonly returns an [N, 1] uint8 array from imencode, while
-        # some builds return [N]. Both represent the same encoded byte stream.
-        encoded = value.astype(np.uint8, copy=False).reshape(-1).tobytes()
+    elif isinstance(value, np.ndarray) and value.ndim == 1:
+        encoded = value.astype(np.uint8, copy=False).tobytes()
 
     if encoded is not None:
         try:

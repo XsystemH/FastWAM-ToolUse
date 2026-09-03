@@ -221,8 +221,7 @@ def main():
             conn,
             {
                 "mode": "image-check",
-                # Normalize OpenCV's usual [N, 1] output for wire compatibility.
-                "image": encoded.reshape(-1),
+                "image": encoded,
                 "color_space": "rgb",
             },
         )
