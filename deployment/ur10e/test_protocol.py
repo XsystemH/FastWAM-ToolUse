@@ -154,6 +154,13 @@ class ProtocolTest(unittest.TestCase):
         rgb[..., 0] = 255
         np.testing.assert_array_equal(decoded, rgb)
 
+    def test_opencv_column_encoded_image_is_rgb(self):
+        encoded = np.frombuffer(make_png(), dtype=np.uint8).reshape(-1, 1)
+        decoded = decode_image(encoded)
+        rgb = np.zeros((2, 3, 3), dtype=np.uint8)
+        rgb[..., 0] = 255
+        np.testing.assert_array_equal(decoded, rgb)
+
     def test_bgr_array_is_converted(self):
         bgr = np.asarray([[[3, 2, 1]]], dtype=np.uint8)
         decoded = decode_image(bgr, color_space="bgr")

@@ -260,7 +260,8 @@ class UR10eSafeProbeClient:
                     [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality],
                 )
                 if ok:
-                    self.img_history.append(encoded)
+                    # Normalize OpenCV's usual [N, 1] output for the wire.
+                    self.img_history.append(encoded.reshape(-1))
                     if self.latest_joints is not None:
                         self.qpos_history.append(
                             list(self.latest_joints) + [self.current_gripper]
