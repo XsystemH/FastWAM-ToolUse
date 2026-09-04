@@ -154,6 +154,26 @@ class ProtocolTest(unittest.TestCase):
         ):
             self.assertIn(marker, source)
 
+    def test_offline_episode_eval_cannot_publish_robot_actions(self):
+        source_path = Path(__file__).with_name("offline_episode_eval.py")
+        source = source_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imported_modules = {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        }
+        imported_modules.update(
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        )
+        self.assertFalse(any(name.startswith("rospy") for name in imported_modules))
+        self.assertFalse(any(name.startswith("trajectory_msgs") for name in imported_modules))
+        self.assertNotIn("Publisher", source)
+        self.assertIn("robot_io=false action_publish=false", source)
+
     def test_confirmed_client_has_two_gates_and_configurable_chunk(self):
         source_path = Path(__file__).with_name("ros_confirmed_step_client.py")
         source = source_path.read_text(encoding="utf-8")
