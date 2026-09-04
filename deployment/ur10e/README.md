@@ -193,9 +193,20 @@ the ROS controller already accepted.
 `ros_fast_wam.py` is the continuous counterpart for final deployment.  Its ROS
 loop, S/R/Q state machine, publishers, reset behavior and trajectory timing
 match `references/ur_rtde/ros_control_client_gello.py`.  The only protocol
-adaptations are the FastWAM request mode, prompt, one-step response request,
-`predicted_action` response key and JPEG bytes needed for cross-version NumPy
-compatibility.
+adaptations are the FastWAM request mode, prompt, `predicted_action` response
+key and JPEG bytes needed for cross-version NumPy compatibility.  Like the
+reference server, the 5090 now runs FastWAM only when its per-connection action
+queue is empty, caches the predicted chunk, and returns one queued action per
+client cycle.  This removes a full model-inference pause between every pair of
+published targets.
+
+The continuous client defaults to executing the first 10 actions from each
+prediction.  Use `--replan-steps 5` or `--replan-steps 10` on the industrial PC
+to select the desired replan interval.  The server defaults to a hard ceiling
+of 10 and can set a different ceiling with `--max-stream-replan-steps`.
+The queue is cleared whenever the TCP client disconnects and a new client
+connects.  `--max-response-steps` continues to govern only non-streaming
+confirmed-chunk requests.
 
 ```bash
 python -u ros_fast_wam.py \
@@ -206,6 +217,7 @@ python -u ros_fast_wam.py \
   --hz 30 \
   --history-size 3 \
   --jpeg-quality 80 \
+  --replan-steps 10 \
   --speed-scale 1.0
 ```
 

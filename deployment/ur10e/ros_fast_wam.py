@@ -45,6 +45,7 @@ class URFastWAMControlClient:
         history_size=3,
         jpeg_quality=80,
         speed_scale=1.0,
+        replan_steps=10,
     ):
         rospy.init_node("ur_fast_wam_client")
         self.bridge = CvBridge()
@@ -56,6 +57,9 @@ class URFastWAMControlClient:
         self.history_size = history_size
         self.jpeg_quality = jpeg_quality
         self.speed_scale = float(np.clip(speed_scale, 0.01, 1.0))
+        self.replan_steps = int(replan_steps)
+        if self.replan_steps <= 0:
+            raise ValueError("replan_steps must be positive.")
         if self.speed_scale != speed_scale:
             rospy.logwarn(
                 f"Clipped --speed-scale from {speed_scale} to {self.speed_scale}. "
@@ -251,6 +255,10 @@ class URFastWAMControlClient:
                 "qpos_history": list(self.qpos_history),
                 "prompt": self.prompt,
                 "requested_action_steps": 1,
+                # Match the reference server: infer a full chunk only when its
+                # per-connection queue is empty, then return one cached action.
+                "action_stream": True,
+                "stream_replan_steps": self.replan_steps,
             },
             protocol=pickle.HIGHEST_PROTOCOL,
         )
@@ -341,6 +349,12 @@ if __name__ == "__main__":
     parser.add_argument("--history-size", type=int, default=3)
     parser.add_argument("--jpeg-quality", type=int, default=80)
     parser.add_argument(
+        "--replan-steps",
+        type=int,
+        default=10,
+        help="Execute this many actions from each predicted chunk before replanning.",
+    )
+    parser.add_argument(
         "--speed-scale",
         type=float,
         default=1.0,
@@ -360,4 +374,5 @@ if __name__ == "__main__":
         history_size=args.history_size,
         jpeg_quality=args.jpeg_quality,
         speed_scale=args.speed_scale,
+        replan_steps=args.replan_steps,
     ).run()

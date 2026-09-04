@@ -37,6 +37,7 @@ def make_args(preview_dir: str, mode: str) -> Namespace:
         preview_dir=preview_dir,
         prompt="pick up the cup",
         max_response_steps=1,
+        max_stream_replan_steps=10,
         max_joint_delta_rad=0.05,
     )
 
@@ -203,10 +204,13 @@ class ProtocolTest(unittest.TestCase):
             'key == ord("q")',
             '"mode": "inference-dry-run"',
             '"requested_action_steps": 1',
+            '"action_stream": True',
+            '"stream_replan_steps": self.replan_steps',
             'response.get("predicted_action")',
             'response.get("execute") is not False',
             '(1.5 / self.hz_target) / self.speed_scale',
             'default=30',
+            'default=10',
         ):
             self.assertIn(marker, source)
         self.assertNotIn("rospy.Timer", source)
@@ -341,6 +345,103 @@ class ProtocolTest(unittest.TestCase):
                         "qpos": np.zeros(7, dtype=np.float32),
                         "prompt": "pick up the cup",
                         "requested_action_steps": 5,
+                    }
+                )
+
+    def test_action_stream_infers_once_then_pops_cached_actions(self):
+        with tempfile.TemporaryDirectory() as preview_dir:
+            engine = FakeEngine()
+            engine.calls = 0
+            original_infer = engine.infer
+
+            def counted_infer(*args):
+                engine.calls += 1
+                return original_infer(*args)
+
+            engine.infer = counted_infer
+            server = StagedUR10eServer(
+                make_args(preview_dir, "inference-dry-run"),
+                engine,
+            )
+            request = {
+                "image": make_png(),
+                "qpos": np.zeros(7, dtype=np.float32),
+                "prompt": "pick up the cup",
+                "requested_action_steps": 1,
+                "action_stream": True,
+                "stream_replan_steps": 5,
+            }
+
+            first = server.handle_request(request)
+            second = server.handle_request(request)
+
+            self.assertEqual(engine.calls, 1)
+            self.assertTrue(first["action_stream"]["inference_performed"])
+            self.assertFalse(second["action_stream"]["inference_performed"])
+            self.assertEqual(first["action_stream"]["queue_remaining"], 4)
+            self.assertEqual(second["action_stream"]["queue_remaining"], 3)
+            np.testing.assert_allclose(first["predicted_action"][0][:6], [0.05] * 6)
+            np.testing.assert_allclose(second["predicted_action"][0][:6], [0.10] * 6)
+
+            for _ in range(3):
+                server.handle_request(request)
+            refilled = server.handle_request(request)
+            self.assertEqual(engine.calls, 2)
+            self.assertTrue(refilled["action_stream"]["inference_performed"])
+            self.assertEqual(refilled["action_stream"]["chunk_id"], 2)
+
+    def test_action_stream_replan_limit_and_connection_reset(self):
+        with tempfile.TemporaryDirectory() as preview_dir:
+            args = make_args(preview_dir, "inference-dry-run")
+            args.max_stream_replan_steps = 2
+            server = StagedUR10eServer(args, FakeEngine())
+            request = {
+                "image": make_png(),
+                "qpos": np.zeros(7, dtype=np.float32),
+                "prompt": "pick up the cup",
+                "action_stream": True,
+            }
+
+            first = server.handle_request(request)
+            self.assertEqual(first["action_stream"]["chunk_steps"], 2)
+            self.assertEqual(first["action_stream"]["queue_remaining"], 1)
+            server.reset_action_stream()
+            restarted = server.handle_request(request)
+            self.assertTrue(restarted["action_stream"]["inference_performed"])
+            self.assertEqual(restarted["action_stream"]["chunk_id"], 2)
+
+    def test_action_stream_request_can_select_ten_replan_steps(self):
+        with tempfile.TemporaryDirectory() as preview_dir:
+            server = StagedUR10eServer(
+                make_args(preview_dir, "inference-dry-run"),
+                FakeEngine(),
+            )
+            response = server.handle_request(
+                {
+                    "image": make_png(),
+                    "qpos": np.zeros(7, dtype=np.float32),
+                    "prompt": "pick up the cup",
+                    "action_stream": True,
+                    "stream_replan_steps": 10,
+                }
+            )
+            self.assertEqual(response["action_stream"]["chunk_steps"], 10)
+            self.assertEqual(response["action_stream"]["queue_remaining"], 9)
+
+    def test_action_stream_rejects_replan_steps_above_server_cap(self):
+        with tempfile.TemporaryDirectory() as preview_dir:
+            server = StagedUR10eServer(
+                make_args(preview_dir, "inference-dry-run"),
+                FakeEngine(),
+            )
+            with self.assertRaisesRegex(ValueError, "exceeds the server cap"):
+                server.handle_request(
+                    {
+                        "image": make_png(),
+                        "qpos": np.zeros(7, dtype=np.float32),
+                        "prompt": "pick up the cup",
+                        "action_stream": True,
+                        "stream_replan_steps": 11,
                     }
                 )
 

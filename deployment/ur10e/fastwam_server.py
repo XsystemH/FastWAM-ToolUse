@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Staged FastWAM TCP server for UR10e image review and dry-run inference.
+"""FastWAM TCP server for staged review and UR10e policy clients.
 
-This initial server deliberately has no action-serving mode. It never imports
-ROS/RTDE and never returns the legacy ``action``, ``arm`` or ``gripper`` keys.
-Consequently the preserved robot client cannot execute its responses.
+The server never imports ROS/RTDE and never returns the legacy ``action``,
+``arm`` or ``gripper`` keys.  Continuous clients explicitly opt into a
+per-connection action stream while confirmed-step clients retain chunk review.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import inspect
 import logging
 import socket
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -236,6 +237,16 @@ class StagedUR10eServer:
         self.preview_dir = Path(args.preview_dir).expanduser().resolve()
         self.preview_dir.mkdir(parents=True, exist_ok=True)
         self.request_count = 0
+        self.max_stream_replan_steps = getattr(args, "max_stream_replan_steps", 10)
+        self.action_queue: deque[np.ndarray] = deque()
+        self.stream_chunk_id = 0
+        self.stream_chunk_safety: dict[str, Any] | None = None
+        self.stream_chunk_infer_ms = 0.0
+
+    def reset_action_stream(self) -> None:
+        self.action_queue.clear()
+        self.stream_chunk_safety = None
+        self.stream_chunk_infer_ms = 0.0
 
     def _preview_path(self) -> Path:
         self.request_count += 1
@@ -266,6 +277,15 @@ class StagedUR10eServer:
         if self.engine is None:
             raise RuntimeError("Inference engine is unavailable.")
         obs = parse_observation(data, default_prompt=self.args.prompt)
+        action_stream = data.get("action_stream", False)
+        if not isinstance(action_stream, bool):
+            raise ValueError("action_stream must be a boolean.")
+        if action_stream:
+            return self._handle_action_stream(obs, data)
+
+        # A non-streaming request must never leave a stale continuous chunk for
+        # a later mode switch on the same connection.
+        self.reset_action_stream()
         requested_steps = data.get("requested_action_steps", self.args.max_response_steps)
         if isinstance(requested_steps, bool) or not isinstance(requested_steps, int):
             raise ValueError("requested_action_steps must be an integer.")
@@ -311,6 +331,85 @@ class StagedUR10eServer:
             "server_timing": {"infer_ms": (time.perf_counter() - started) * 1000.0},
         }
 
+    def _handle_action_stream(self, obs: Any, data: dict[str, Any]) -> dict[str, Any]:
+        inference_performed = False
+        if not self.action_queue:
+            started = time.perf_counter()
+            predicted = self.engine.infer(obs.image_rgb, obs.qpos, obs.prompt)
+            predicted_steps = int(len(predicted))
+            requested_replan_steps = data.get(
+                "stream_replan_steps", self.max_stream_replan_steps
+            )
+            if isinstance(requested_replan_steps, bool) or (
+                requested_replan_steps is not None
+                and not isinstance(requested_replan_steps, int)
+            ):
+                raise ValueError("stream_replan_steps must be an integer.")
+            chunk_steps = (
+                predicted_steps
+                if requested_replan_steps is None
+                else int(requested_replan_steps)
+            )
+            if chunk_steps <= 0:
+                raise ValueError("stream_replan_steps must be positive when provided.")
+            if chunk_steps > self.max_stream_replan_steps:
+                raise ValueError(
+                    f"stream_replan_steps={chunk_steps} exceeds the server cap "
+                    f"of {self.max_stream_replan_steps}."
+                )
+            if chunk_steps > predicted_steps:
+                raise ValueError(
+                    f"stream_replan_steps={chunk_steps} exceeds predicted chunk length "
+                    f"{predicted_steps}."
+                )
+            safe = limit_absolute_actions(
+                predicted,
+                current_qpos=obs.qpos,
+                max_response_steps=chunk_steps,
+                max_joint_delta_rad=self.args.max_joint_delta_rad,
+            )
+            self.action_queue.extend(safe.actions)
+            self.stream_chunk_id += 1
+            self.stream_chunk_infer_ms = (time.perf_counter() - started) * 1000.0
+            self.stream_chunk_safety = {
+                "source_shape": safe.source_shape,
+                "chunk_steps": safe.returned_steps,
+                "max_joint_delta_rad": self.args.max_joint_delta_rad,
+                "clipped_joint_values": safe.clipped_joint_values,
+                "clipped_gripper_values": safe.clipped_gripper_values,
+            }
+            inference_performed = True
+            LOGGER.info(
+                "FASTWAM_ACTION_STREAM_REFILL chunk=%d steps=%d infer_ms=%.1f",
+                self.stream_chunk_id,
+                safe.returned_steps,
+                self.stream_chunk_infer_ms,
+            )
+
+        action = np.asarray(self.action_queue.popleft(), dtype=np.float32)[None, :]
+        return {
+            "ok": True,
+            "mode": "inference_dry_run",
+            "execute": False,
+            "image_shape": tuple(int(v) for v in obs.image_rgb.shape),
+            "color_space": "RGB",
+            "action_semantics": "absolute_joint_target",
+            "joint_order": JOINT_ORDER,
+            "predicted_action": action.tolist(),
+            "predicted_arm": action[:, :6].tolist(),
+            "predicted_gripper": action[:, -1:].tolist(),
+            "action_stream": {
+                "chunk_id": self.stream_chunk_id,
+                "inference_performed": inference_performed,
+                "queue_remaining": len(self.action_queue),
+                **(self.stream_chunk_safety or {}),
+            },
+            "server_timing": {
+                "infer_ms": self.stream_chunk_infer_ms if inference_performed else 0.0,
+                "chunk_infer_ms": self.stream_chunk_infer_ms,
+            },
+        }
+
     def serve_forever(self) -> None:
         max_payload = int(self.args.max_payload_mib * 1024 * 1024)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
@@ -326,6 +425,7 @@ class StagedUR10eServer:
             )
             while True:
                 conn, addr = server.accept()
+                self.reset_action_stream()
                 with conn:
                     conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                     LOGGER.info("Client connected: %s", addr)
@@ -349,6 +449,7 @@ class StagedUR10eServer:
                         # Framing/unpickling errors make the current stream unsafe to
                         # reuse, but must not terminate the image-check server.
                         LOGGER.exception("Closing malformed client stream: %s", addr)
+                self.reset_action_stream()
 
 
 def parse_args() -> argparse.Namespace:
@@ -376,12 +477,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sigma-shift", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-response-steps", type=int, default=1)
+    parser.add_argument(
+        "--max-stream-replan-steps",
+        type=int,
+        default=10,
+        help=(
+            "Maximum actions cached per FastWAM inference for continuous clients."
+        ),
+    )
     parser.add_argument("--max-joint-delta-rad", type=float, default=0.05)
     args = parser.parse_args()
     if args.max_payload_mib <= 0:
         parser.error("--max-payload-mib must be positive")
     if args.max_response_steps <= 0:
         parser.error("--max-response-steps must be positive")
+    if args.max_stream_replan_steps <= 0:
+        parser.error("--max-stream-replan-steps must be positive")
     if args.mode == "inference-dry-run" and not (args.checkpoint and args.dataset_stats):
         parser.error("inference-dry-run requires --checkpoint and --dataset-stats")
     return args
