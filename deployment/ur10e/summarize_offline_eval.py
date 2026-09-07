@@ -32,11 +32,17 @@ SUMMARY_KEYS = (
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("metrics", type=Path)
+    parser.add_argument(
+        "--include-first-replan",
+        action="store_true",
+        help="Also include the full first-replan vectors.",
+    )
     args = parser.parse_args()
     with args.metrics.open(encoding="utf-8") as handle:
         report = json.load(handle)
     compact = {key: report.get(key) for key in SUMMARY_KEYS}
-    compact["first_replan"] = report.get("first_replan")
+    if args.include_first_replan:
+        compact["first_replan"] = report.get("first_replan")
     print(json.dumps(compact, ensure_ascii=False, indent=2))
 
 
