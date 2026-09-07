@@ -100,6 +100,9 @@ def build_config(args: argparse.Namespace):
     OmegaConf.update(cfg, "data.train.dataset_dirs", [str(args.dataset)], merge=False)
     OmegaConf.update(cfg, "data.train.is_training_set", False, merge=False)
     OmegaConf.update(cfg, "data.train.pretrained_norm_stats", str(args.stats), merge=False)
+    # The UR task config performs on-the-fly prompt encoding.  Match the live
+    # server instead of inheriting the training-only memory optimization.
+    OmegaConf.update(cfg, "model.load_text_encoder", True, merge=False)
     OmegaConf.update(cfg, "model.skip_dit_load_from_pretrain", True, merge=False)
     OmegaConf.update(cfg, "model.action_dit_pretrained_path", None, merge=False)
     return cfg
