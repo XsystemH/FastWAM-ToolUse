@@ -190,6 +190,7 @@ def main() -> None:
     stitched_pred_normalized = []
     stitched_gt_normalized = []
     rows = []
+    previous_input_image = None
     started = time.perf_counter()
     indices = list(range(start, stop, args.replan_steps))
 
@@ -203,11 +204,24 @@ def main() -> None:
     for replan_index, dataset_index in enumerate(indices):
         sample = add_batch_dim(dataset[dataset_index])
         video = sample["video"][0]
+        input_image = video[:, 0]
+        input_image_cpu = input_image.detach().to(device="cpu", dtype=torch.float32).numpy()
+        image_change_mae = (
+            None
+            if previous_input_image is None
+            else float(np.mean(np.abs(input_image_cpu - previous_input_image)))
+        )
+        image_identical = (
+            None
+            if previous_input_image is None
+            else bool(np.array_equal(input_image_cpu, previous_input_image))
+        )
+        previous_input_image = input_image_cpu
         gt_action = sample["action"][0]
         proprio = sample["proprio"][0, 0].unsqueeze(0)
         kwargs = {
             "prompt": None,
-            "input_image": video[:, 0].unsqueeze(0),
+            "input_image": input_image.unsqueeze(0),
             "action_horizon": int(gt_action.shape[-2]),
             "num_video_frames": 1,
             "proprio": proprio,
@@ -277,6 +291,8 @@ def main() -> None:
             "large_first_step": bool(
                 np.max(np.abs(first_pred_delta)) > args.large_first_step_threshold
             ),
+            "input_image_change_mae": image_change_mae,
+            "input_image_identical_to_previous": image_identical,
             "state": state0.tolist(),
             "first_predicted_action": pred[0].tolist(),
             "first_ground_truth_action": gt[0].tolist(),
@@ -317,6 +333,14 @@ def main() -> None:
         [row["first_gt_arm_delta_maxabs"] for row in rows]
     )
     boundary_jump_maxabs = np.asarray([row["boundary_jump_maxabs"] for row in rows])
+    image_changes = np.asarray(
+        [
+            row["input_image_change_mae"]
+            for row in rows
+            if row["input_image_change_mae"] is not None
+        ],
+        dtype=np.float64,
+    )
     max_absolute_value = float(
         max(
             np.max(np.abs(state[:, :6])),
@@ -357,6 +381,10 @@ def main() -> None:
         "predicted_first_delta_maxabs": float(first_pred_delta_maxabs.max()),
         "ground_truth_first_delta_maxabs": float(first_gt_delta_maxabs.max()),
         "boundary_jump_maxabs": float(boundary_jump_maxabs.max()),
+        "unchanged_replan_image_count": int(
+            sum(row["input_image_identical_to_previous"] is True for row in rows)
+        ),
+        "mean_replan_image_change_mae": safe_mean(image_changes),
         "arm_value_maxabs": max_absolute_value,
         "arm_unit_diagnostic": (
             "radian_scale" if max_absolute_value <= 2 * np.pi + 0.5 else "inspect_units"

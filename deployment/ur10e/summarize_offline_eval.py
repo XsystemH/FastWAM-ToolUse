@@ -23,6 +23,8 @@ SUMMARY_KEYS = (
     "predicted_first_delta_maxabs",
     "ground_truth_first_delta_maxabs",
     "boundary_jump_maxabs",
+    "unchanged_replan_image_count",
+    "mean_replan_image_change_mae",
     "arm_value_maxabs",
     "arm_unit_diagnostic",
     "elapsed_seconds",
