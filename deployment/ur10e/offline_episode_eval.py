@@ -49,10 +49,21 @@ def parse_args() -> argparse.Namespace:
         default=Path("/home/wbjsamuel/Downloads/FastWAM-eval/cup-270222/episode-000"),
     )
     parser.add_argument("--episode", type=int, default=0)
-    parser.add_argument("--replan-steps", type=int, default=10)
+    parser.add_argument(
+        "--replan-steps",
+        type=int,
+        default=5,
+        help="Replan every N recorded frames and retain the first N predicted actions.",
+    )
     parser.add_argument("--num-inference-steps", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--active-delta-threshold", type=float, default=1e-3)
+    parser.add_argument(
+        "--large-first-step-threshold",
+        type=float,
+        default=0.25,
+        help="Flag a predicted first-step arm-joint delta above this many radians.",
+    )
     return parser.parse_args()
 
 
@@ -70,6 +81,8 @@ def require_inputs(args: argparse.Namespace) -> None:
         raise ValueError("--replan-steps must be positive.")
     if args.num_inference_steps <= 0:
         raise ValueError("--num-inference-steps must be positive.")
+    if args.large_first_step_threshold <= 0:
+        raise ValueError("--large-first-step-threshold must be positive.")
 
 
 def build_config(args: argparse.Namespace):
@@ -80,7 +93,7 @@ def build_config(args: argparse.Namespace):
     ):
         cfg = hydra.compose(
             config_name="train",
-            overrides=["task=ur-robotiq-uncond-1cam224", "model=fastwam_joint"],
+            overrides=["task=ur_robotiq_uncond_1cam224", "model=fastwam_joint"],
         )
 
     OmegaConf.update(cfg, "mixed_precision", "bf16", merge=False)
@@ -171,6 +184,8 @@ def main() -> None:
     stitched_pred = []
     stitched_gt = []
     stitched_state = []
+    stitched_pred_normalized = []
+    stitched_gt_normalized = []
     rows = []
     started = time.perf_counter()
     indices = list(range(start, stop, args.replan_steps))
@@ -219,11 +234,30 @@ def main() -> None:
         take = min(args.replan_steps, stop - dataset_index, len(pred), len(gt))
         pred = pred[:take]
         gt = gt[:take]
+        pred_normalized = (
+            result["action"].detach().to(device="cpu", dtype=torch.float32).numpy()
+        )
+        if pred_normalized.ndim == 3:
+            pred_normalized = pred_normalized[0]
+        gt_normalized = gt_action.detach().to(device="cpu", dtype=torch.float32).numpy()
+        if gt_normalized.ndim == 3:
+            gt_normalized = gt_normalized[0]
+        pred_normalized = pred_normalized[:take]
+        gt_normalized = gt_normalized[:take]
         state0 = np.asarray(state[0], dtype=np.float32)
         diff = pred - gt
+        first_pred_delta = pred[0, :6] - state0[:6]
+        first_gt_delta = gt[0, :6] - state0[:6]
+        boundary_jump = (
+            pred[0, :6] - stitched_pred[-1][-1, :6]
+            if stitched_pred
+            else np.zeros(6, dtype=np.float32)
+        )
         stitched_pred.append(pred)
         stitched_gt.append(gt)
         stitched_state.append(np.repeat(state0[None, :], take, axis=0))
+        stitched_pred_normalized.append(pred_normalized)
+        stitched_gt_normalized.append(gt_normalized)
         row = {
             "replan_index": replan_index,
             "dataset_index": dataset_index,
@@ -231,6 +265,24 @@ def main() -> None:
             "mae": float(np.mean(np.abs(diff))),
             "rmse": float(np.sqrt(np.mean(np.square(diff)))),
             "first_step_mae": float(np.mean(np.abs(diff[0]))),
+            "first_pred_arm_delta_l2": float(np.linalg.norm(first_pred_delta)),
+            "first_pred_arm_delta_maxabs": float(np.max(np.abs(first_pred_delta))),
+            "first_gt_arm_delta_l2": float(np.linalg.norm(first_gt_delta)),
+            "first_gt_arm_delta_maxabs": float(np.max(np.abs(first_gt_delta))),
+            "boundary_jump_l2": float(np.linalg.norm(boundary_jump)),
+            "boundary_jump_maxabs": float(np.max(np.abs(boundary_jump))),
+            "large_first_step": bool(
+                np.max(np.abs(first_pred_delta)) > args.large_first_step_threshold
+            ),
+            "state": state0.tolist(),
+            "first_predicted_action": pred[0].tolist(),
+            "first_ground_truth_action": gt[0].tolist(),
+            "first_predicted_delta": np.concatenate(
+                [first_pred_delta, pred[0, 6:] - state0[6:]]
+            ).tolist(),
+            "first_ground_truth_delta": np.concatenate(
+                [first_gt_delta, gt[0, 6:] - state0[6:]]
+            ).tolist(),
             "seconds": time.perf_counter() - one_started,
         }
         rows.append(row)
@@ -239,6 +291,8 @@ def main() -> None:
     pred = np.concatenate(stitched_pred, axis=0)
     gt = np.concatenate(stitched_gt, axis=0)
     state = np.concatenate(stitched_state, axis=0)
+    pred_normalized = np.concatenate(stitched_pred_normalized, axis=0)
+    gt_normalized = np.concatenate(stitched_gt_normalized, axis=0)
     diff = pred - gt
     pred_delta = pred[:, :6] - state[:, :6]
     gt_delta = gt[:, :6] - state[:, :6]
@@ -253,6 +307,20 @@ def main() -> None:
         & active_motion[:-1]
     )
     reversal_denominator = active_motion[1:] & active_motion[:-1]
+    first_pred_delta_maxabs = np.asarray(
+        [row["first_pred_arm_delta_maxabs"] for row in rows]
+    )
+    first_gt_delta_maxabs = np.asarray(
+        [row["first_gt_arm_delta_maxabs"] for row in rows]
+    )
+    boundary_jump_maxabs = np.asarray([row["boundary_jump_maxabs"] for row in rows])
+    max_absolute_value = float(
+        max(
+            np.max(np.abs(state[:, :6])),
+            np.max(np.abs(pred[:, :6])),
+            np.max(np.abs(gt[:, :6])),
+        )
+    )
 
     summary = {
         "offline_only": True,
@@ -267,6 +335,9 @@ def main() -> None:
         "evaluated_action_steps": int(len(pred)),
         "replan_steps": args.replan_steps,
         "replans": len(rows),
+        "checkpoint": str(args.checkpoint.resolve()),
+        "dataset": str(args.dataset.resolve()),
+        "stats": str(args.stats.resolve()),
         "finite_ratio": float((np.isfinite(pred) & np.isfinite(gt)).mean()),
         "mae": float(np.mean(np.abs(diff))),
         "rmse": float(np.sqrt(np.mean(np.square(diff)))),
@@ -274,6 +345,18 @@ def main() -> None:
         "direction_match_ratio": safe_mean(direction_match),
         "predicted_reversal_ratio": safe_mean(
             reversal_mask[reversal_denominator]
+        ),
+        "first_replan": rows[0],
+        "first_step_large_threshold_rad": args.large_first_step_threshold,
+        "large_first_step_count": int(
+            np.count_nonzero(first_pred_delta_maxabs > args.large_first_step_threshold)
+        ),
+        "predicted_first_delta_maxabs": float(first_pred_delta_maxabs.max()),
+        "ground_truth_first_delta_maxabs": float(first_gt_delta_maxabs.max()),
+        "boundary_jump_maxabs": float(boundary_jump_maxabs.max()),
+        "arm_value_maxabs": max_absolute_value,
+        "arm_unit_diagnostic": (
+            "radian_scale" if max_absolute_value <= 2 * np.pi + 0.5 else "inspect_units"
         ),
         "elapsed_seconds": time.perf_counter() - started,
         "replan_metrics": rows,
@@ -285,6 +368,8 @@ def main() -> None:
         ground_truth_action=gt,
         recorded_state=state,
         difference=diff,
+        predicted_action_normalized=pred_normalized,
+        ground_truth_action_normalized=gt_normalized,
     )
     with (args.output / "metrics.json").open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, ensure_ascii=False, indent=2)
