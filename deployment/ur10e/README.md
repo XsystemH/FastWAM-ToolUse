@@ -85,6 +85,57 @@ thread stack and exits. It creates no publishers and never requests inference.
 
 ## Dry-run inference
 
+### 5090 task launchers
+
+On `wbjsamuel@HW335-5090-UR10e`, the six 80k checkpoints and their matching
+normalization statistics are kept together under:
+
+```text
+/media/wbjsamuel/data/FastWAM-checkpoints/extend80-276515/<task>/
+├── step_080000.pt
+└── <task>-stats.json
+```
+
+Use the task-specific launchers from the repository root. Each launcher fixes
+the checkpoint, statistics file and prompt as one mapping, so a task cannot
+silently inherit another task's normalization statistics:
+
+```bash
+bash deployment/ur10e/launchers/start-brush.sh
+bash deployment/ur10e/launchers/start-cup.sh
+bash deployment/ur10e/launchers/start-hammer.sh
+bash deployment/ur10e/launchers/start-knife.sh
+bash deployment/ur10e/launchers/start-screwdriver.sh
+bash deployment/ur10e/launchers/start-spoon.sh
+```
+
+Only run one server per port. The default is port 9999; select another port
+explicitly with `--port`. The launchers use `inference-dry-run`, preserve the
+server's `execute=false` response contract and set both confirmed-step and
+continuous-client caps to 10 actions. Examples:
+
+```bash
+# Validate one task without loading the model.
+bash deployment/ur10e/launchers/start-hammer.sh --check-only
+
+# Use a different port and a five-action server cap.
+bash deployment/ur10e/launchers/start-cup.sh \
+  --port 10000 \
+  --max-response-steps 5 \
+  --max-stream-replan-steps 5
+
+# Inspect all task mappings or check all checkpoint/stats pairs.
+bash deployment/ur10e/start_task_server.sh --list
+bash deployment/ur10e/start_task_server.sh --check-all
+```
+
+The exact dataset instructions are embedded in
+`start_task_server.sh`: brush cleaning, cup-to-kettle pouring, hammering the
+nail, cutting with the knife, tightening with the screwdriver, and spooning
+food into the target container. Component paths default to the model caches
+already present on the 5090 and can be overridden only through the documented
+`FASTWAM_*` environment variables.
+
 ```bash
 python -m deployment.ur10e.fastwam_server \
   --mode inference-dry-run \
